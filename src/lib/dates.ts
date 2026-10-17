@@ -58,3 +58,10 @@ export function formatMonthDay(date: DateOnly): string {
   const [, m, d] = date.split('-').map(Number);
   return `${MONTHS[m - 1]} ${d}`;
 }
+
+/** Whole days from a to b (positive when b is later). Pure calendar math, no time zones. */
+export function daysBetween(a: DateOnly, b: DateOnly): number {
+  const [ay, am, ad] = a.split('-').map(Number);
+  const [by, bm, bd] = b.split('-').map(Number);
+  return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86_400_000);
+}

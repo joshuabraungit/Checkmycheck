@@ -21,6 +21,10 @@ export function isExcelFile(name: string): boolean {
   return /\.xlsx$/i.test(name);
 }
 
+export function isPdfFile(name: string): boolean {
+  return /\.pdf$/i.test(name);
+}
+
 export class SpreadsheetReadError extends Error {}
 
 /**

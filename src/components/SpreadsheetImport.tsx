@@ -5,7 +5,9 @@ import {
 import { formatDateShort } from '../lib/dates';
 import { formatCents, sumCents } from '../lib/money';
 import { appendDeals, appendPayments } from '../lib/ops';
-import { readSpreadsheetFile } from '../lib/readSpreadsheet';
+import { extractPaystub, linesToRows } from '../lib/pdfText';
+import { isPdfFile, readSpreadsheetFile } from '../lib/readSpreadsheet';
+import { PaystubDialog, readPdfLines, type Paystub } from './PaystubImport';
 import {
   buildDeals, buildPayments, buildSheet, columnLetter, DEFAULT_OPTIONS, dateValues, detectDateOrder, fieldsFor, guessMapping,
   headerSignature, pickTab, type DateOrder, type Field, type ImportKind, type ImportOptions, type Mapping, type Sheet, type Tab,
@@ -14,7 +16,7 @@ import type { Deal, Payment, Workspace } from '../lib/types';
 import { useStore } from '../state';
 import { FormError, Modal } from './ui';
 
-const ACCEPT = '.csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+const ACCEPT = '.csv,.xlsx,.pdf,text/csv,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 const MEMORY_PREFIX = 'cmc-import:';
 
 interface Remembered {
@@ -463,13 +465,14 @@ function MappingDialog({
 
 type Opened =
   | { mode: 'own'; fileName: string; result: ImportResult<Deal | Payment> }
+  | { mode: 'stubs'; fileName: string; stubs: Paystub[] }
   | { mode: 'map'; fileName: string; tabs: Tab[] }
   | { mode: 'error'; fileName: string; message: string };
 
 /**
- * A button that opens a CSV or Excel file and walks through importing it.
- * Files in this app's own export format keep their IDs; anything else goes
- * through column matching.
+ * A button that opens a CSV, Excel, or PDF file and walks through importing it.
+ * Files in this app's own export format keep their IDs. PDF paystubs (one or
+ * several) go to a paystub review; everything else goes through column matching.
  */
 export function SpreadsheetImportButton({ kind, label, className = 'btn' }: { kind: ImportKind; label: string; className?: string }) {
   const { ws } = useStore();
@@ -479,13 +482,44 @@ export function SpreadsheetImportButton({ kind, label, className = 'btn' }: { ki
   const [status, setStatus] = useState<string | null>(null);
   const [reading, setReading] = useState(false);
 
+  async function openPdfs(files: File[]) {
+    const read = await Promise.all(files.map(async (f) => ({ file: f, lines: await readPdfLines(f) })));
+    if (kind === 'payments') {
+      const stubs = read.map(({ file, lines }) => ({ fileName: file.name, result: extractPaystub(lines) }));
+      // A single PDF with no commission line may be a table-style statement instead of a paystub.
+      if (files.length > 1 || stubs[0].result.commissionLines.length) {
+        setOpened({ mode: 'stubs', fileName: files[0].name, stubs });
+        return;
+      }
+    }
+    if (files.length > 1) throw new Error('Pick one PDF at a time for deals.');
+    const rows = linesToRows(read[0].lines);
+    const sheet = buildSheet(rows);
+    if ('error' in sheet) {
+      throw new Error(
+        kind === 'payments'
+          ? 'We couldn’t find a commission line or a table of payments in this PDF.'
+          : 'We couldn’t find a table of deals in this PDF. Exporting the report as CSV or Excel usually works better.',
+      );
+    }
+    setOpened({ mode: 'map', fileName: files[0].name, tabs: [{ name: files[0].name, rows }] });
+  }
+
   async function onChange(e: ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
+    const files = Array.from(e.target.files ?? []);
     if (ref.current) ref.current.value = '';
-    if (!file) return;
+    if (!files.length) return;
+    const file = files[0];
     setStatus(null);
     setReading(true);
     try {
+      const pdfs = files.filter((f) => isPdfFile(f.name));
+      if (pdfs.length) {
+        if (pdfs.length !== files.length) throw new Error('Pick either PDFs or one spreadsheet, not both at once.');
+        await openPdfs(pdfs);
+        return;
+      }
+      if (files.length > 1) throw new Error('Pick one spreadsheet at a time. (Several PDF paystubs at once is fine.)');
       const { tabs, text } = await readSpreadsheetFile(file);
       if (text !== null && isOwnFormat(kind, tabs[0].rows)) {
         const result = kind === 'deals' ? parseDealCsv(text, ws) : parsePaymentCsv(text, ws);
@@ -500,7 +534,8 @@ export function SpreadsheetImportButton({ kind, label, className = 'btn' }: { ki
         setOpened({ mode: 'map', fileName: file.name, tabs: usable });
       }
     } catch (err) {
-      setOpened({ mode: 'error', fileName: file.name, message: (err as Error).message || 'This file couldn’t be read.' });
+      const name = files.length > 1 ? `${files.length} files` : file.name;
+      setOpened({ mode: 'error', fileName: name, message: (err as Error).message || 'This file couldn’t be read.' });
     } finally {
       setReading(false);
     }
@@ -524,6 +559,7 @@ export function SpreadsheetImportButton({ kind, label, className = 'btn' }: { ki
           type="file"
           accept={ACCEPT}
           className="visually-hidden-file"
+          multiple={kind === 'payments'}
           data-testid={`import-${kind}`}
           onChange={(e) => void onChange(e)}
         />
@@ -533,12 +569,13 @@ export function SpreadsheetImportButton({ kind, label, className = 'btn' }: { ki
           {status}
         </span>
       )}
+      {opened?.mode === 'stubs' && <PaystubDialog stubs={opened.stubs} onClose={close} onDone={done} />}
       {opened?.mode === 'own' && <OwnFormatDialog kind={kind} fileName={opened.fileName} result={opened.result} onClose={close} onDone={done} />}
       {opened?.mode === 'map' && <MappingDialog kind={kind} fileName={opened.fileName} tabs={opened.tabs} onClose={close} onDone={done} />}
       {opened?.mode === 'error' && (
         <Modal title={`Couldn’t import ${opened.fileName}`} onClose={close}>
           <p role="alert">{opened.message}</p>
-          <p className="muted">CSV and Excel (.xlsx) files work. The first rows should include column names.</p>
+          <p className="muted">CSV, Excel (.xlsx), and PDF files work. Spreadsheets need column names in the first rows.</p>
           <div className="actions">
             <button type="button" className="btn" onClick={close}>
               Close

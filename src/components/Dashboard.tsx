@@ -10,6 +10,7 @@ import { DealForm } from './DealForm';
 import { InquiryDialog } from './InquiryDialog';
 import { downloadText } from './ui';
 import { SpreadsheetImportButton } from './SpreadsheetImport';
+import { AutoMatchButton } from './AutoMatch';
 
 type SortKey = 'commission' | 'account' | 'expectedDate' | 'expected' | 'received' | 'difference' | 'status';
 
@@ -168,9 +169,12 @@ export function Dashboard({ year, years, onYear, asOf, onAsOf, onGoToPayments }:
             <strong>Match your payments to deals to finish the comparison.</strong> {formatCents(summary.unallocatedCents)} received by{' '}
             {asOfLabel} isn’t matched to deals yet, so the numbers below are provisional.
           </p>
-          <button type="button" className="btn btn-small" onClick={onGoToPayments}>
-            Match payments
-          </button>
+          <div className="actions-inline">
+            <AutoMatchButton />
+            <button type="button" className="btn btn-small" onClick={onGoToPayments}>
+              Match by hand
+            </button>
+          </div>
         </div>
       )}
 

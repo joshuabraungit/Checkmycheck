@@ -1322,3 +1322,58 @@ label.btn[aria-disabled='true'] {
     grid-template-columns: 1fr;
   }
 }
+
+/* Auto-match review */
+.match-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.match-item {
+  border-bottom: 1px solid var(--border);
+  padding: 0.6rem 0;
+}
+.match-item .check-row {
+  margin: 0;
+}
+.match-item .badge {
+  margin-left: 0.25rem;
+}
+.match-lines {
+  margin: 0.3rem 0 0 2.4rem;
+  padding-left: 1rem;
+  font-size: 0.925rem;
+}
+.match-item > p {
+  margin: 0.3rem 0 0 2.4rem;
+}
+
+/* Paystub review */
+.stub-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.stub-item {
+  border-bottom: 1px solid var(--border);
+  padding: 0.6rem 0;
+}
+.stub-item .check-row {
+  margin: 0 0 0.2rem;
+}
+.stub-item > p {
+  margin: 0.2rem 0 0.4rem;
+}
+.stub-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 12rem));
+  gap: 0 1rem;
+}
+.stub-fields .field {
+  margin-bottom: 0.4rem;
+}
+@media (max-width: 720px) {
+  .stub-fields {
+    grid-template-columns: 1fr;
+  }
+}

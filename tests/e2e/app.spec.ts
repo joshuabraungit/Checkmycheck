@@ -415,3 +415,97 @@ test('picks the right tab of a multi-tab workbook and lets you switch', async ({
   await pdlg.getByRole('button', { name: 'Import 2 payments' }).click();
   await expect(page.getByTestId('payment-card')).toHaveCount(2);
 });
+
+async function importCsv(page: Page, kind: 'deals' | 'payments', csv: string, order?: 'MDY') {
+  await page.getByTestId(`import-${kind}`).setInputFiles({ name: `${kind}.csv`, mimeType: 'text/csv', buffer: Buffer.from(csv) });
+  const dlg = page.getByRole('dialog', { name: `Import ${kind} from a spreadsheet` });
+  if (order) await dlg.getByLabel(/month first/).check();
+  await dlg.getByRole('button', { name: new RegExp(`^Import \\d+ ${kind.slice(0, -1)}`) }).click();
+  await expect(dlg).toBeHidden();
+}
+
+test('auto-matches lump-sum payments to deals and finds the real shortfall', async ({ page }) => {
+  await createPlan(page);
+  await setAsOf(page, '2026-06-30');
+  await importCsv(
+    page,
+    'deals',
+    'Account,ARR,Close Date,Expected Payout Date\nAcme,60000,2026-01-20,2026-02-15\nBeacon,30000,2026-02-03,2026-03-15\nCedar,20000,2026-02-25,2026-03-15\nDelta,40000,2026-03-10,2026-04-15\n',
+  );
+  await page.getByRole('button', { name: 'Payments', exact: true }).click();
+  // Feb: Acme exactly. Mar: Beacon + Cedar exactly (Cedar crosses quota: $10k x 10% + $10k x 15%). Apr: only part of Delta.
+  await importCsv(page, 'payments', 'Pay Date,Gross Commission\n2026-02-13,6000\n2026-03-13,5500\n2026-04-15,5000\n');
+  await page.getByRole('button', { name: 'Match automatically' }).click();
+  const dlg = page.getByRole('dialog', { name: 'Match payments to deals' });
+  await expect(dlg.getByTestId('match-summary')).toHaveText('2 add up exactly · 1 best guess');
+  await expect(dlg).toContainText('Beacon: $3,000.00');
+  await expect(dlg).toContainText('Cedar: $2,500.00');
+  // Delta: $40k, starting at $110k attainment, is all above the $100k quota: $6,000 expected.
+  await expect(dlg).toContainText('Delta: $5,000.00 of $6,000.00 outstanding');
+  await dlg.getByRole('button', { name: 'Match 3 payments' }).click();
+  await expect(dlg).toBeHidden();
+  await expect(page.getByText('isn’t matched to deals yet')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Overview' }).click();
+  await setAsOf(page, '2026-06-30');
+  await expect(page.getByTestId('received-due')).toHaveText('$16,500.00');
+  await expect(page.getByTestId('deal-row-Delta')).toContainText('Partially received');
+  await expect(page.getByText('Provisional')).toHaveCount(0);
+});
+
+test('imports commission from several PDF paystubs and reads a PDF statement table', async ({ page }) => {
+  const { makePdf, paystub } = await import('../fixtures/makePdf');
+  const feb = await makePdf([paystub('02/13/2026', '6,000.00', '6,000.00')]);
+  const mar = await makePdf([paystub('03/13/2026', '5,000.00', '11,000.00')]);
+  const scanned = await makePdf([[]]);
+  const pdf = (name: string, buffer: Buffer) => ({ name, mimeType: 'application/pdf', buffer });
+
+  await createPlan(page);
+  await page.getByRole('button', { name: 'Payments', exact: true }).click();
+  // A scanned PDF has no text and is reported plainly.
+  await page.getByTestId('import-payments').setInputFiles(pdf('scan.pdf', scanned));
+  await expect(page.getByRole('dialog')).toContainText('looks like a scanned image');
+  await page.keyboard.press('Escape');
+
+  await page.getByTestId('import-payments').setInputFiles([pdf('2026-02-13.pdf', feb), pdf('2026-03-13.pdf', mar)]);
+  const dlg = page.getByRole('dialog', { name: 'Import commission from 2 paystubs' });
+  const rows = dlg.getByTestId('paystub-row');
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0)).toContainText('Found Commission $6,000.00');
+  await expect(rows.nth(0).getByLabel('Pay date')).toHaveValue('2026-02-13');
+  await expect(rows.nth(1).getByLabel('Gross commission ($)')).toHaveValue('5000');
+  await dlg.getByRole('button', { name: 'Import 2 payments' }).click();
+  await expect(page.getByText('Imported 2 payments from paystubs.')).toBeVisible();
+  await expect(page.getByTestId('payment-card')).toHaveCount(2);
+
+  // Importing the same paystub again is flagged.
+  await page.getByTestId('import-payments').setInputFiles(pdf('2026-02-13.pdf', feb));
+  await expect(page.getByRole('dialog')).toContainText('You already imported this paystub.');
+  await page.keyboard.press('Escape');
+
+  // A table-style PDF report goes through column matching for deals.
+  const report = await makePdf([
+    [
+      [50, 40, 'Closed Won Report'],
+      [50, 70, 'Account'],
+      [220, 70, 'ARR'],
+      [320, 70, 'Close Date'],
+      [50, 85, 'Acme'],
+      [220, 85, '$60,000.00'],
+      [320, 85, '2026-01-20'],
+    ],
+    [
+      [50, 70, 'Account'],
+      [220, 70, 'ARR'],
+      [320, 70, 'Close Date'],
+      [50, 85, 'Beacon'],
+      [220, 85, '$50,000.00'],
+      [320, 85, '2026-02-10'],
+    ],
+  ]);
+  await page.getByRole('button', { name: 'Overview' }).click();
+  await page.getByTestId('import-deals').setInputFiles(pdf('report.pdf', report));
+  const ddlg = page.getByRole('dialog', { name: 'Import deals from a spreadsheet' });
+  await expect(ddlg.getByTestId('import-summary')).toContainText('2 deals ready');
+  await ddlg.getByRole('button', { name: 'Import 2 deals' }).click();
+  await expect(page.getByTestId('deal-row-Beacon')).toBeVisible();
+});
