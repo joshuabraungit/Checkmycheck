@@ -180,20 +180,20 @@ test('CSV import previews, rejects invalid files atomically, and imports valid o
   await createPlan(page);
   await openSettings(page, 'Backup & files');
   const bad = 'deal_id,plan_year,account,reference,credited_revenue_usd,close_date,expected_payment_date,same_day_order,notes\n,2026,Good,,100,2026-01-10,2026-02-15,,\n,2026,Bad,,abc,2026-01-10,2026-02-15,,\n';
-  await page.locator('#deal-csv').setInputFiles({ name: 'bad.csv', mimeType: 'text/csv', buffer: Buffer.from(bad) });
+  await page.getByTestId('import-deals').setInputFiles({ name: 'bad.csv', mimeType: 'text/csv', buffer: Buffer.from(bad) });
   const dlg = page.getByRole('dialog', { name: /Import deals/ });
   await expect(dlg).toContainText('Nothing was imported');
   await expect(dlg).toContainText('Row 3');
   await dlg.getByRole('button', { name: 'Close' }).first().click();
 
   const good = 'deal_id,plan_year,account,reference,credited_revenue_usd,close_date,expected_payment_date,same_day_order,notes\n,2026,"Acme, Inc.",R1,"60,000.00",2026-01-10,2026-02-15,,"multi\nline"\n,2026,Acme,R2,500,2026-01-10,2026-02-15,,\n';
-  await page.locator('#deal-csv').setInputFiles({ name: 'good.csv', mimeType: 'text/csv', buffer: Buffer.from(good) });
+  await page.getByTestId('import-deals').setInputFiles({ name: 'good.csv', mimeType: 'text/csv', buffer: Buffer.from(good) });
   await expect(dlg).toContainText('2 deals ready to import');
   await dlg.getByRole('button', { name: 'Import 2 deals' }).click();
   await expect(page.getByText('Imported 2 deals.')).toBeVisible();
 
   const pays = 'payment_id,payment_date,gross_commission_usd,reference,notes\n,2026-02-15,6000,Feb,\n';
-  await page.locator('#payment-csv').setInputFiles({ name: 'p.csv', mimeType: 'text/csv', buffer: Buffer.from(pays) });
+  await page.getByTestId('import-payments').setInputFiles({ name: 'p.csv', mimeType: 'text/csv', buffer: Buffer.from(pays) });
   const pdlg = page.getByRole('dialog', { name: /Import payments/ });
   await expect(pdlg).toContainText('Imported payments start unallocated');
   await pdlg.getByRole('button', { name: 'Import 1 payments' }).click();
@@ -271,4 +271,91 @@ test('a second tab picks up changes instead of overwriting them', async ({ page,
   await addDeal(other, 'From Tab Two', '2000', '2026-01-11', '2026-02-15');
   await expect(page.getByTestId('deal-row-From Tab Two')).toBeVisible();
   await expect(page.getByTestId('deal-row-From Tab One')).toBeVisible();
+});
+
+test('imports a messy CRM export with column matching, ambiguous dates, and remembered choices', async ({ page }) => {
+  await createPlan(page);
+  await setAsOf(page, '2026-06-30');
+  const crm = [
+    'Closed Won Opportunities report,,,,',
+    'Opportunity Owner,Account Name,Amount,Close Date,Opportunity ID',
+    'Me,Acme,"$60,000.00",01/10/2026,OPP-1',
+    'Me,Beacon,"$50,000.00",02/10/2026,OPP-2',
+    'Total,,"$110,000.00",,',
+  ].join('\n');
+  const file = { name: 'opps.csv', mimeType: 'text/csv', buffer: Buffer.from(crm) };
+  await page.getByTestId('import-deals').setInputFiles(file);
+  const dlg = page.getByRole('dialog', { name: 'Import deals from a spreadsheet' });
+  await expect(dlg).toContainText('using row 2 for column names');
+  await expect(dlg.getByLabel('Account name (required)')).toHaveValue('1');
+  await expect(dlg.getByLabel('Credited revenue (required)')).toHaveValue('2');
+  // 01/10 vs 10/01 can't be told apart, so we have to choose.
+  await expect(dlg.getByTestId('import-summary')).toContainText('Choose how to read dates');
+  await expect(dlg.getByRole('button', { name: /^Import/ })).toBeDisabled();
+  await dlg.getByLabel('January 2 (month first, US style)').check();
+  await dlg.getByLabel('Expected payment date: days after close').fill('45');
+  await expect(dlg.getByTestId('import-summary')).toContainText('2 deals ready · 1 skipped');
+  await expect(dlg).toContainText('Feb 24, 2026'); // Jan 10 + 45 days
+  await dlg.getByRole('button', { name: 'Import 2 deals' }).click();
+  await expect(dlg).toBeHidden();
+  await expect(page.getByText('Imported 2 deals.')).toBeVisible();
+  await expect(page.getByTestId('deal-row-Acme')).toBeVisible();
+  await expect(page.getByTestId('expected-due')).toHaveText('$11,500.00');
+
+  // Next month's export: same layout, one new deal. Choices are remembered and existing deals are skipped.
+  const next = crm.replace('Total,,', 'Me,Cedar,"$20,000.00",03/20/2026,OPP-3\nTotal,,');
+  await page.getByTestId('import-deals').setInputFiles({ ...file, buffer: Buffer.from(next) });
+  await expect(dlg).toContainText('column choices from your last import');
+  await expect(dlg.getByTestId('import-summary')).toContainText('1 deal ready · 3 skipped');
+  await dlg.getByRole('button', { name: 'Import 1 deal' }).click();
+  await expect(page.getByTestId('deal-row-Cedar')).toBeVisible();
+  await expect(page.getByTestId('deal-row-Acme')).toHaveCount(1);
+});
+
+test('blocks the whole import when any row has a problem', async ({ page }) => {
+  await createPlan(page);
+  const csv = 'Customer,ACV,Close Date\nGood,100,2026-01-10\nBad,TBD,2026-01-11\n';
+  await page.getByTestId('import-deals').setInputFiles({ name: 'x.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
+  const dlg = page.getByRole('dialog', { name: 'Import deals from a spreadsheet' });
+  await expect(dlg).toContainText('Row 3: Credited revenue “TBD” isn’t a number');
+  await expect(dlg.getByRole('button', { name: /^Import/ })).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('deal-row-Good')).toHaveCount(0);
+});
+
+test('imports deals and a payment statement from Excel files', async ({ page }) => {
+  const { default: writeExcelFile } = await import('write-excel-file/node');
+  const deals = await writeExcelFile([
+    [{ value: 'Account' }, { value: 'Bookings' }, { value: 'Close Date' }, { value: 'Pay Date' }],
+    [{ value: 'Acme' }, { value: 60000, type: Number }, { value: new Date(Date.UTC(2026, 0, 10)), type: Date, format: 'mm/dd/yyyy' }, { value: new Date(Date.UTC(2026, 1, 15)), type: Date, format: 'mm/dd/yyyy' }],
+    [{ value: 'Beacon' }, { value: 50000.5, type: Number }, { value: new Date(Date.UTC(2026, 1, 10)), type: Date, format: 'mm/dd/yyyy' }, { value: new Date(Date.UTC(2026, 2, 15)), type: Date, format: 'mm/dd/yyyy' }],
+  ]).toBuffer();
+  const xlsxType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+  await createPlan(page);
+  await setAsOf(page, '2026-06-30');
+  await page.getByTestId('import-deals').setInputFiles({ name: 'deals.xlsx', mimeType: xlsxType, buffer: deals });
+  const dlg = page.getByRole('dialog', { name: 'Import deals from a spreadsheet' });
+  await expect(dlg.getByTestId('import-summary')).toContainText('2 deals ready');
+  await expect(dlg).toContainText('$50,000.50');
+  await expect(dlg).toContainText('Mar 15, 2026');
+  await dlg.getByRole('button', { name: 'Import 2 deals' }).click();
+  await expect(page.getByTestId('deal-row-Beacon')).toBeVisible();
+
+  const statement = await writeExcelFile([
+    [{ value: 'Q1 commission statement' }],
+    [],
+    [{ value: 'Pay Date' }, { value: 'Gross Commission' }, { value: 'Net Pay' }, { value: 'Statement' }],
+    [{ value: new Date(Date.UTC(2026, 1, 15)), type: Date, format: 'mm/dd/yyyy' }, { value: 6000, type: Number }, { value: 4100, type: Number }, { value: 'Feb' }],
+    [{ value: new Date(Date.UTC(2026, 2, 15)), type: Date, format: 'mm/dd/yyyy' }, { value: 7950, type: Number }, { value: 5400, type: Number }, { value: 'Mar' }],
+  ]).toBuffer();
+  await page.getByRole('button', { name: 'Payments', exact: true }).click();
+  await page.getByTestId('import-payments').setInputFiles({ name: 'statement.xlsx', mimeType: xlsxType, buffer: statement });
+  const pdlg = page.getByRole('dialog', { name: 'Import payments from a spreadsheet' });
+  await expect(pdlg.getByLabel('Gross commission (required)')).toHaveValue('1');
+  await expect(pdlg.getByTestId('import-summary')).toContainText('2 payments ready');
+  await expect(pdlg).toContainText('Total: $13,950.00');
+  await pdlg.getByRole('button', { name: 'Import 2 payments' }).click();
+  await expect(page.getByText('Imported 2 payments.')).toBeVisible();
+  await expect(page.getByTestId('payment-card')).toHaveCount(2);
 });

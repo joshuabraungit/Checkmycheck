@@ -702,7 +702,8 @@ textarea {
   width: 100%;
   max-width: 100%;
 }
-input[type='checkbox'] {
+input[type='checkbox'],
+input[type='radio'] {
   width: 20px;
   height: 20px;
   min-height: 0;
@@ -1145,6 +1146,7 @@ textarea {
   .save-indicator {
     position: absolute;
     width: 1px;
+    min-width: 0;
     height: 1px;
     overflow: hidden;
     clip: rect(0, 0, 0, 0);
@@ -1241,5 +1243,82 @@ textarea {
   }
   .alloc-input {
     flex: 1 1 100%;
+  }
+}
+
+/* Spreadsheet import */
+.import-button {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+.import-status {
+  font-size: 0.9rem;
+}
+label.btn[aria-disabled='true'] {
+  opacity: 0.6;
+  pointer-events: none;
+}
+.map-fields,
+.date-order {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.5rem 1rem 0.75rem;
+  margin: 0.75rem 0 1rem;
+  min-width: 0;
+}
+.map-fields legend,
+.date-order legend {
+  font-weight: 600;
+  padding: 0 0.3rem;
+}
+.date-order.has-error {
+  border-color: var(--red);
+}
+.map-row {
+  display: grid;
+  grid-template-columns: minmax(0, 13rem) minmax(0, 1fr);
+  gap: 0.25rem 1rem;
+  align-items: center;
+  padding: 0.35rem 0;
+}
+.map-row label {
+  font-weight: 600;
+}
+.map-row .req {
+  font-weight: 400;
+  color: var(--muted);
+}
+.map-row select {
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+.input-short {
+  max-width: 8rem;
+}
+.import-options .check-row {
+  margin: 0.4rem 0;
+}
+.import-summary {
+  background: var(--surface-2);
+  border-radius: 8px;
+  padding: 0.6rem 0.9rem;
+  margin: 0.75rem 0;
+}
+.import-summary p {
+  margin: 0;
+}
+.skipped {
+  margin: 0 0 0.75rem;
+  font-size: 0.925rem;
+}
+.skipped summary {
+  cursor: pointer;
+  color: var(--green-strong);
+}
+@media (max-width: 720px) {
+  .map-row {
+    grid-template-columns: 1fr;
   }
 }
