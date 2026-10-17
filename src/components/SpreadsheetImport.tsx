@@ -8,7 +8,7 @@ import { appendDeals, appendPayments } from '../lib/ops';
 import { readSpreadsheetFile } from '../lib/readSpreadsheet';
 import {
   buildDeals, buildPayments, buildSheet, columnLetter, DEFAULT_OPTIONS, dateValues, detectDateOrder, fieldsFor, guessMapping,
-  headerSignature, type DateOrder, type Field, type ImportKind, type ImportOptions, type Mapping, type Sheet,
+  headerSignature, pickTab, type DateOrder, type Field, type ImportKind, type ImportOptions, type Mapping, type Sheet, type Tab,
 } from '../lib/sheetImport';
 import type { Deal, Payment, Workspace } from '../lib/types';
 import { useStore } from '../state';
@@ -201,8 +201,8 @@ function sampleFor(sheet: Sheet, col: number): string {
   return v.length > 24 ? `${v.slice(0, 23)}…` : v;
 }
 
-/** Match columns, settle ambiguous dates, preview, and import. */
-function MappingDialog({
+/** Match columns, settle ambiguous dates, preview, and import one tab. */
+function MappingBody({
   kind, fileName, sheet, onClose, onDone,
 }: { kind: ImportKind; fileName: string; sheet: Sheet; onClose: () => void; onDone: (m: string) => void }) {
   const { ws, saving, error, save } = useImportCommit(kind, onDone);
@@ -240,7 +240,7 @@ function MappingDialog({
   }
 
   return (
-    <Modal title={`Import ${kind} from a spreadsheet`} onClose={onClose} wide>
+    <>
       <p className="muted">
         <strong>{fileName}</strong>: {sheet.rows.length} {sheet.rows.length === 1 ? 'row' : 'rows'}
         {sheet.headerRowNumber > 1 ? `, using row ${sheet.headerRowNumber} for column names` : ''}.{' '}
@@ -414,13 +414,56 @@ function MappingDialog({
           Cancel
         </button>
       </div>
+    </>
+  );
+}
+
+/** Tab picker around the column matching. Switching tabs starts matching fresh for that tab. */
+function MappingDialog({
+  kind, fileName, tabs, onClose, onDone,
+}: { kind: ImportKind; fileName: string; tabs: Tab[]; onClose: () => void; onDone: (m: string) => void }) {
+  const [tab, setTab] = useState(() => pickTab(kind, tabs));
+  const tabId = useId();
+  const built = useMemo(() => buildSheet(tabs[tab].rows), [tabs, tab]);
+  return (
+    <Modal title={`Import ${kind} from a spreadsheet`} onClose={onClose} wide>
+      {tabs.length > 1 && (
+        <div className="field">
+          <label htmlFor={tabId}>Which tab has your {kind}?</label>
+          <p className="help" id={`${tabId}-help`}>
+            This file has {tabs.length} tabs. We picked the one that looks most like {kind}.
+          </p>
+          <select id={tabId} value={tab} onChange={(e) => setTab(Number(e.target.value))} aria-describedby={`${tabId}-help`}>
+            {tabs.map((t, i) => (
+              <option key={i} value={i}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+      {'error' in built ? (
+        <>
+          <p className="form-error" role="alert">
+            {tabs.length > 1 ? `The “${tabs[tab].name}” tab can’t be imported. ` : ''}
+            {built.error}
+          </p>
+          <div className="actions">
+            <button type="button" className="btn" onClick={onClose}>
+              Close
+            </button>
+          </div>
+        </>
+      ) : (
+        <MappingBody key={tab} kind={kind} fileName={fileName} sheet={built} onClose={onClose} onDone={onDone} />
+      )}
     </Modal>
   );
 }
 
 type Opened =
   | { mode: 'own'; fileName: string; result: ImportResult<Deal | Payment> }
-  | { mode: 'map'; fileName: string; sheet: Sheet }
+  | { mode: 'map'; fileName: string; tabs: Tab[] }
   | { mode: 'error'; fileName: string; message: string };
 
 /**
@@ -443,15 +486,19 @@ export function SpreadsheetImportButton({ kind, label, className = 'btn' }: { ki
     setStatus(null);
     setReading(true);
     try {
-      const { rows, text } = await readSpreadsheetFile(file);
-      if (text !== null && isOwnFormat(kind, rows)) {
+      const { tabs, text } = await readSpreadsheetFile(file);
+      if (text !== null && isOwnFormat(kind, tabs[0].rows)) {
         const result = kind === 'deals' ? parseDealCsv(text, ws) : parsePaymentCsv(text, ws);
         setOpened({ mode: 'own', fileName: file.name, result });
         return;
       }
-      const sheet = buildSheet(rows);
-      if ('error' in sheet) setOpened({ mode: 'error', fileName: file.name, message: sheet.error });
-      else setOpened({ mode: 'map', fileName: file.name, sheet });
+      const usable = tabs.filter((t) => !('error' in buildSheet(t.rows)));
+      if (!usable.length) {
+        const first = buildSheet(tabs[0].rows);
+        setOpened({ mode: 'error', fileName: file.name, message: 'error' in first ? first.error : 'This file couldn’t be read.' });
+      } else {
+        setOpened({ mode: 'map', fileName: file.name, tabs: usable });
+      }
     } catch (err) {
       setOpened({ mode: 'error', fileName: file.name, message: (err as Error).message || 'This file couldn’t be read.' });
     } finally {
@@ -487,7 +534,7 @@ export function SpreadsheetImportButton({ kind, label, className = 'btn' }: { ki
         </span>
       )}
       {opened?.mode === 'own' && <OwnFormatDialog kind={kind} fileName={opened.fileName} result={opened.result} onClose={close} onDone={done} />}
-      {opened?.mode === 'map' && <MappingDialog kind={kind} fileName={opened.fileName} sheet={opened.sheet} onClose={close} onDone={done} />}
+      {opened?.mode === 'map' && <MappingDialog kind={kind} fileName={opened.fileName} tabs={opened.tabs} onClose={close} onDone={done} />}
       {opened?.mode === 'error' && (
         <Modal title={`Couldn’t import ${opened.fileName}`} onClose={close}>
           <p role="alert">{opened.message}</p>

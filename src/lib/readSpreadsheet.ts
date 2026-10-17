@@ -1,4 +1,5 @@
 import { parseCsv } from './csv';
+import type { Tab } from './sheetImport';
 
 export type CellValue = string | number | boolean | Date | null | undefined;
 
@@ -23,16 +24,19 @@ export function isExcelFile(name: string): boolean {
 export class SpreadsheetReadError extends Error {}
 
 /**
- * Read a CSV or .xlsx file into rows of text. The Excel reader is loaded
+ * Read a CSV or .xlsx file into tabs of text rows (a CSV is one tab). The Excel reader is loaded
  * only when an Excel file is picked, so it doesn't slow the app down.
  */
-export async function readSpreadsheetFile(file: File): Promise<{ rows: string[][]; text: string | null }> {
+export async function readSpreadsheetFile(file: File): Promise<{ tabs: Tab[]; text: string | null }> {
   if (isExcelFile(file.name)) {
     try {
-      const { readSheet } = await import('read-excel-file/browser');
+      const { default: readExcelFile } = await import('read-excel-file/browser');
       // Keep numbers as their exact text so money is never squeezed through floating point.
-      const data = await readSheet(file, { parseNumber: (s: string) => s });
-      return { rows: (data as CellValue[][]).map((r) => r.map(cellToText)), text: null };
+      const sheets = await readExcelFile(file, { parseNumber: (s: string) => s });
+      return {
+        tabs: sheets.map((s) => ({ name: s.sheet, rows: (s.data as CellValue[][]).map((r) => r.map(cellToText)) })),
+        text: null,
+      };
     } catch {
       throw new SpreadsheetReadError('This Excel file couldn’t be read. Try saving it as .xlsx again, or export it as CSV.');
     }
@@ -41,5 +45,5 @@ export async function readSpreadsheetFile(file: File): Promise<{ rows: string[][
     throw new SpreadsheetReadError('Older .xls files aren’t supported. Save it as .xlsx or CSV and try again.');
   }
   const text = await file.text();
-  return { rows: parseCsv(text), text };
+  return { tabs: [{ name: file.name, rows: parseCsv(text) }], text };
 }
