@@ -32,8 +32,8 @@ Playwright needs a Chromium browser. If you don't have one yet, run `npx playwri
 1. **Plan.** One plan per calendar year: annual quota (credited revenue), base commission rate, and an optional marginal accelerator rate.
 2. **Deals.** Account, credited revenue, close date, and expected payment date (plus an optional reference and notes).
 3. **Payments.** Gross commission amounts with the date they were actually paid.
-4. **Allocations.** Split each payment across the deals it covered. You can split one payment across several deals, put several payments toward one deal, leave money unallocated, or allocate more than expected to record an excess receipt.
-5. **Overview.** Pick a plan year and an "as of" date to see:
+4. **Allocations.** Split each payment across the deals it covered, right in the payment form. For a new payment the app suggests a split (oldest due deals first, up to what's still owed on each) that you can adjust. You can split one payment across several deals, put several payments toward one deal, leave money unallocated, or allocate more than expected to record an excess receipt.
+5. **Overview.** Leads with one answer (for example "You may be owed $550.00") and the deals behind it. It defaults to today; use "Change date" to look at another as-of date. "Show all the numbers" has the full breakdown:
    - **Expected by this date**: expected commission on deals whose expected payment date is on or before the as-of date
    - **Received toward that amount**: allocated payments dated on or before the as-of date toward those deals
    - **Difference to review**: the signed gap between the two

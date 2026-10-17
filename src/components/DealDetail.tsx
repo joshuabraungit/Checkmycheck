@@ -151,7 +151,7 @@ export function DealDetail({ row, asOf, onClose, onEdit }: { row: DealReconcilia
 
       <h3>Payments allocated to this deal</h3>
       {row.allocations.length === 0 ? (
-        <p className="muted">No payments are allocated to this deal yet. Allocate from the Payments section.</p>
+        <p className="muted">No payments are matched to this deal yet. Record or edit a payment on the Payments tab to match it.</p>
       ) : (
         <table className="calc-table">
           <tbody>

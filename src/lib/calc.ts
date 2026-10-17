@@ -323,3 +323,37 @@ export function compareExpected(
     otherChangedDealIds: changed.filter((id) => !directlyEditedDealIds.includes(id)),
   };
 }
+
+/**
+ * Suggest how a payment splits across deals: oldest expected payment date
+ * first, each deal filled up to what other payments haven't covered yet.
+ * Only deals already due by the payment date get a suggestion; anything left
+ * over stays unallocated rather than being guessed onto future deals.
+ */
+export function suggestAllocations(
+  ws: Workspace,
+  paymentDate: DateOnly,
+  amountCents: Dec,
+  excludePaymentId?: string,
+): Map<string, Dec> {
+  const calcs = calculateAll(ws);
+  const fromOthers = new Map<string, Dec>();
+  for (const a of ws.allocations) {
+    if (a.paymentId === excludePaymentId) continue;
+    fromOthers.set(a.dealId, (fromOthers.get(a.dealId) ?? new D(0)).plus(a.amountCents));
+  }
+  const due = sortDealsForCommission(ws.deals.filter((d) => d.expectedPaymentDate <= paymentDate)).sort((a, b) =>
+    a.expectedPaymentDate.localeCompare(b.expectedPaymentDate),
+  );
+  const result = new Map<string, Dec>();
+  let left = amountCents;
+  for (const d of due) {
+    if (left.lte(0)) break;
+    const outstanding = calcs.get(d.id)!.expectedCents.minus(fromOthers.get(d.id) ?? 0);
+    if (outstanding.lte(0)) continue;
+    const take = D.min(outstanding, left);
+    result.set(d.id, take);
+    left = left.minus(take);
+  }
+  return result;
+}
