@@ -29,7 +29,7 @@ Playwright needs a Chromium browser. If you don't have one yet, run `npx playwri
 
 ## How it works
 
-1. **Plan.** One plan per calendar year: annual quota (credited revenue), base commission rate, and an optional marginal accelerator rate.
+1. **Plan.** One plan per calendar year: an annual quota or four quarterly quotas (credited revenue), a base commission rate, and optional higher tiers that start at a percentage of quota. Higher tiers pay either marginally (only above the threshold) or retroactively (on all revenue so far in the period).
 2. **Deals.** Account, credited revenue, close date, and expected payment date (plus an optional reference and notes).
 3. **Payments.** Gross commission amounts with the date they were actually paid.
 4. **Allocations.** Split each payment across the deals it covered, right in the payment form. For a new payment the app suggests a split (oldest due deals first, up to what's still owed on each) that you can adjust. You can split one payment across several deals, put several payments toward one deal, leave money unallocated, or allocate more than expected to record an excess receipt.
@@ -46,15 +46,18 @@ The calculation module lives in `src/lib/calc.ts`. It's pure and has its own tes
 
 - Money is stored as integer cents in decimal strings (`"550000"`), and rates as decimal fractions (`"0.10"`). All arithmetic uses `decimal.js`, never floating point.
 - Deals are processed in commission order: close date, then same-day order (editable), then deal ID as a fixed tie-breaker.
-- With an accelerator: `basePortion = min(R, max(Q − C, 0))`, `acceleratedPortion = R − basePortion`, and `expected = roundHalfUp(basePortion × b + acceleratedPortion × a)`. Without one: `expected = roundHalfUp(R × b)`. Rounding happens once per deal, to the cent.
-- Quota attainment starts over each calendar year. A January payment can settle a December deal from the year before without counting toward the new year's quota.
+- Each tier starts at a fraction of the period's quota `Q` (the first at 0). For a deal with revenue `R` and earlier credited revenue `C` in the same period:
+  - **Marginal:** the span from `C` to `C + R` is split at each tier's start (`Q × fromAttainment`), each slice is multiplied by its tier's rate, and `expected = roundHalfUp(Σ slice × rate)`.
+  - **Retroactive:** the deal earns the rate of the tier reached at `C + R`. If that's higher than the tier at `C`, the deal also carries a catch-up of `C × (newRate − oldRate)`, so the period pays out exactly `(C + R) × newRate` overall. Reaching a threshold exactly counts as reaching that tier. Earlier deals keep what they earned.
+  - Rounding happens once per deal, to the cent.
+- Quota attainment starts over each calendar year, or each quarter (by close date) on a quarterly plan. A January payment can settle a December deal from the year before without counting toward the new year's quota.
 - `difference = expected − received as of the date`. Expected commissions are always derived, never stored.
 
 ## Supported plans and limitations
 
-The app supports one plan per calendar year in USD, with a single marginal accelerator above an annual quota. It **does not** model:
+The app supports one plan per calendar year in USD, with an annual or quarterly quota and up to 10 marginal or retroactive tiers. It **does not** model:
 
-- retroactive accelerators, multiple accelerator tiers, or quarterly quota resets
+- quarterly quotas combined with annual accelerators
 - split commissions, commission caps, recoverable draws, or ramp compensation
 - SPIFFs or bonuses, clawbacks, or negative revenue adjustments
 - midyear plan changes (an edited plan applies to the whole year)
@@ -70,7 +73,7 @@ These limits show up during plan setup, and you have to confirm your plan fits b
 
 ### Import and export
 
-- **Full JSON backup and restore**: schema version, plans, deals, payments, allocations, stable IDs, and same-day order. Restores are fully validated (schema version, field formats, dangling IDs, over-allocated payments, allocations to deals that close after the payment date). You see a preview of record counts, can download your current data first, and have to confirm before anything is replaced.
+- **Full JSON backup and restore**: schema version (backups from version 1 are upgraded automatically on restore), plans, deals, payments, allocations, stable IDs, and same-day order. Restores are fully validated (schema version, field formats, dangling IDs, over-allocated payments, allocations to deals that close after the payment date). You see a preview of record counts, can download your current data first, and have to confirm before anything is replaced.
 - **Deal CSV import/export**: `deal_id, plan_year, account, reference, credited_revenue_usd, close_date, expected_payment_date, same_day_order, notes`
 - **Payment CSV import/export**: `payment_id, payment_date, gross_commission_usd, reference, notes`. Imported payments start unallocated.
 - **Allocation CSV export**: `allocation_id, payment_id, deal_id, amount_usd`

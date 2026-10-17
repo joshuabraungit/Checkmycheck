@@ -6,8 +6,8 @@
 import { allocatedByPayment, sortDealsForCommission } from './calc';
 import { formatDateShort, isValidDate, yearOf } from './dates';
 import { D, MAX_INPUT_CENTS, formatCents, sumCents } from './money';
-import { newId, type Allocation, type Cents, type Deal, type Payment, type Plan, type Workspace } from './types';
-import { hasVisibleText, isValidRate } from './validate';
+import { newId, type Allocation, type Cents, type Deal, type Payment, type Plan, type QuotaPeriod, type Tier, type TierMode, type Workspace } from './types';
+import { hasVisibleText, planShapeProblems } from './validate';
 
 export class OpError extends Error {}
 
@@ -23,20 +23,17 @@ function assertPositiveCents(v: Cents, label: string) {
 export interface PlanInput {
   id?: string;
   year: number;
-  annualQuotaCents: Cents;
-  baseRate: string;
-  acceleratorRate: string | null;
+  period: QuotaPeriod;
+  quotasCents: Cents[];
+  tiers: Tier[];
+  tierMode: TierMode;
   notes: string;
 }
 
 export function savePlan(ws: Workspace, input: PlanInput): Workspace {
   if (!Number.isInteger(input.year) || input.year < 1900 || input.year > 2999) fail('Enter a valid calendar year.');
-  assertPositiveCents(input.annualQuotaCents, 'Annual quota');
-  if (!isValidRate(input.baseRate)) fail('Base rate must be greater than 0% and at most 100%.');
-  if (input.acceleratorRate !== null) {
-    if (!isValidRate(input.acceleratorRate)) fail('Accelerator rate must be greater than 0% and at most 100%.');
-    if (new D(input.acceleratorRate).lt(input.baseRate)) fail('Accelerator rate must be at least the base rate.');
-  }
+  const problems = planShapeProblems(input);
+  if (problems.length) fail(problems[0]);
   const clash = ws.plans.find((p) => p.year === input.year && p.id !== input.id);
   if (clash) fail(`There is already a plan for ${input.year}.`);
 

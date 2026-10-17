@@ -9,7 +9,8 @@ import { demoWorkspace, DEMO_AS_OF } from './demo';
 import { buildInquiry } from './inquiry';
 import { formatCents, parseMoneyInput, parsePercentInput } from './money';
 import { plan, ws } from './testHelpers';
-import { validateWorkspace } from './validate';
+import { OpError, savePlan } from './ops';
+import { planShapeProblems, validateWorkspace } from './validate';
 
 describe('19. CSV parsing and validation', () => {
   it('handles quotes, commas, escaped quotes, line breaks, CRLF, and BOM', () => {
@@ -210,5 +211,85 @@ describe('payroll inquiry', () => {
     expect(text).toContain('net difference of');
     expect(text).toContain('may be incomplete');
     expect(text).toContain('Hi [name],');
+  });
+});
+
+describe('schema migration and plan validation', () => {
+  const v1 = () => {
+    const w = demoWorkspace() as unknown as Record<string, unknown>;
+    return {
+      ...w,
+      schemaVersion: 1,
+      plans: [
+        {
+          id: '00000000-0000-4000-8000-000000002026',
+          year: 2026,
+          currency: 'USD',
+          annualQuotaCents: '10000000',
+          baseRate: '0.10',
+          acceleratorRate: '0.15',
+          notes: '',
+        },
+      ],
+    };
+  };
+
+  it('upgrades version 1 data with identical numbers', () => {
+    const r = validateWorkspace(v1());
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.workspace.schemaVersion).toBe(2);
+    expect(r.workspace.plans[0]).toMatchObject({
+      period: 'annual',
+      quotasCents: ['10000000'],
+      tierMode: 'marginal',
+      tiers: [
+        { fromAttainment: '0.0', rate: '0.10' },
+        { fromAttainment: '1.0', rate: '0.15' },
+      ],
+    });
+    const before = reconcile(demoWorkspace(), 2026, DEMO_AS_OF).summary;
+    const after = reconcile(r.workspace, 2026, DEMO_AS_OF).summary;
+    expect(after.expectedDueCents.toFixed(0)).toBe(before.expectedDueCents.toFixed(0));
+    expect(after.differenceCents.toFixed(0)).toBe('55000');
+  });
+
+  it('upgrades a version 1 plan without an accelerator to a single tier', () => {
+    const raw = v1();
+    (raw.plans[0] as Record<string, unknown>).acceleratorRate = null;
+    const r = validateWorkspace(raw);
+    expect(r.ok && r.workspace.plans[0].tiers).toEqual([{ fromAttainment: '0.0', rate: '0.10' }]);
+  });
+
+  it('restores a version 1 backup file', () => {
+    const r = parseBackupJson(JSON.stringify({ app: 'check-my-check', ...v1() }));
+    expect(r.ok).toBe(true);
+  });
+
+  it('rejects plans with tiers out of order or the wrong number of quotas', () => {
+    const shape = { period: 'annual', quotasCents: ['100'], tierMode: 'marginal' };
+    expect(planShapeProblems({ ...shape, tiers: [{ fromAttainment: '0.5', rate: '0.1' }] })).toContain('The first tier must start at 0% of quota.');
+    expect(
+      planShapeProblems({ ...shape, tiers: [{ fromAttainment: '0.0', rate: '0.1' }, { fromAttainment: '0.0', rate: '0.2' }] }),
+    ).toContain('Each tier must start at a higher percentage of quota than the one before it.');
+    expect(
+      planShapeProblems({ ...shape, tiers: [{ fromAttainment: '0.0', rate: '0.2' }, { fromAttainment: '1.0', rate: '0.1' }] }),
+    ).toContain('Each tier’s rate must be at least the rate of the tier before it.');
+    expect(planShapeProblems({ ...shape, period: 'quarterly', tiers: [{ fromAttainment: '0.0', rate: '0.1' }] })).toContain(
+      'A quarterly plan needs a quota for each of the four quarters.',
+    );
+  });
+
+  it('refuses to save a plan with a bad tier setup', () => {
+    expect(() =>
+      savePlan(ws({}), {
+        year: 2026,
+        period: 'annual',
+        quotasCents: ['100'],
+        tiers: [{ fromAttainment: '0.0', rate: '0.2' }, { fromAttainment: '1.0', rate: '0.1' }],
+        tierMode: 'retroactive',
+        notes: '',
+      }),
+    ).toThrow(OpError);
   });
 });

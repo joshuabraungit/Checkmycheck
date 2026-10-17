@@ -1,6 +1,6 @@
 import { isValidDate, yearOf } from './dates';
 import { D, MAX_INPUT_CENTS } from './money';
-import { SCHEMA_VERSION, type Allocation, type Deal, type Payment, type Plan, type Workspace } from './types';
+import { SCHEMA_VERSION, type Allocation, type Deal, type Payment, type Plan, type Tier, type Workspace } from './types';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CENTS_RE = /^\d+$/;
@@ -26,6 +26,73 @@ export function isValidRate(v: unknown): v is string {
   return d.gt(0) && d.lte(1) && d.decimalPlaces() <= 6;
 }
 
+/** Tier threshold as a fraction of quota: 0 up to 100 (10,000%), at most 6 decimal places. */
+function isValidThreshold(v: unknown): v is string {
+  if (typeof v !== 'string' || !RATE_RE.test(v)) return false;
+  const d = new D(v);
+  return d.gte(0) && d.lte(100) && d.decimalPlaces() <= 6;
+}
+
+export const MAX_TIERS = 10;
+
+/**
+ * Plain-language problems with a plan's quota and tier settings, or an empty
+ * list. Shared by the editor and by workspace validation so they can't drift.
+ */
+export function planShapeProblems(p: { period: unknown; quotasCents: unknown; tiers: unknown; tierMode: unknown }): string[] {
+  const problems: string[] = [];
+  if (p.period !== 'annual' && p.period !== 'quarterly') problems.push('Quota period must be annual or quarterly.');
+  const expectedQuotas = p.period === 'quarterly' ? 4 : 1;
+  if (!Array.isArray(p.quotasCents) || p.quotasCents.length !== expectedQuotas) {
+    problems.push(p.period === 'quarterly' ? 'A quarterly plan needs a quota for each of the four quarters.' : 'An annual plan needs one quota.');
+  } else if (!p.quotasCents.every((q) => isPositiveCents(q))) {
+    problems.push('Each quota must be greater than $0 and at most $999,999,999.99.');
+  }
+  if (p.tierMode !== 'marginal' && p.tierMode !== 'retroactive') problems.push('Tier mode must be marginal or retroactive.');
+  if (!Array.isArray(p.tiers) || p.tiers.length === 0) {
+    problems.push('A plan needs at least one commission rate.');
+    return problems;
+  }
+  if (p.tiers.length > MAX_TIERS) problems.push(`A plan can have at most ${MAX_TIERS} tiers.`);
+  const tiers = p.tiers as unknown[];
+  if (!tiers.every((t) => isObject(t) && isValidThreshold(t.fromAttainment) && isValidRate(t.rate))) {
+    problems.push('Each tier needs a starting point between 0% and 10,000% of quota and a rate greater than 0% and at most 100%.');
+    return problems;
+  }
+  const valid = tiers as Tier[];
+  if (!new D(valid[0].fromAttainment).isZero()) problems.push('The first tier must start at 0% of quota.');
+  for (let i = 1; i < valid.length; i++) {
+    if (new D(valid[i].fromAttainment).lte(valid[i - 1].fromAttainment)) {
+      problems.push('Each tier must start at a higher percentage of quota than the one before it.');
+      break;
+    }
+  }
+  for (let i = 1; i < valid.length; i++) {
+    if (new D(valid[i].rate).lt(valid[i - 1].rate)) {
+      problems.push('Each tier’s rate must be at least the rate of the tier before it.');
+      break;
+    }
+  }
+  return problems;
+}
+
+/**
+ * Upgrade older saved data to the current schema. Version 1 plans had one
+ * annual quota, a base rate, and an optional marginal accelerator, which map
+ * exactly onto an annual, marginal plan with one or two tiers.
+ */
+export function migrateWorkspace(raw: unknown): unknown {
+  if (!isObject(raw) || raw.schemaVersion !== 1 || !Array.isArray(raw.plans)) return raw;
+  const plans = raw.plans.map((p) => {
+    if (!isObject(p)) return p;
+    const { annualQuotaCents, baseRate, acceleratorRate, ...rest } = p;
+    const tiers: Array<{ fromAttainment: unknown; rate: unknown }> = [{ fromAttainment: '0.0', rate: baseRate }];
+    if (acceleratorRate !== null && acceleratorRate !== undefined) tiers.push({ fromAttainment: '1.0', rate: acceleratorRate });
+    return { ...rest, period: 'annual', quotasCents: [annualQuotaCents], tiers, tierMode: 'marginal' };
+  });
+  return { ...raw, schemaVersion: 2, plans };
+}
+
 function isString(v: unknown): v is string {
   return typeof v === 'string';
 }
@@ -41,7 +108,8 @@ export type ValidationResult = { ok: true; workspace: Workspace } | { ok: false;
  * relationship between plans, deals, payments, and allocations.
  * Returns a cleaned copy containing only known fields.
  */
-export function validateWorkspace(raw: unknown): ValidationResult {
+export function validateWorkspace(input: unknown): ValidationResult {
+  const raw = migrateWorkspace(input);
   const errors: string[] = [];
   if (!isObject(raw)) return { ok: false, errors: ['The file does not contain a workspace object.'] };
   if (raw.schemaVersion !== SCHEMA_VERSION) {
@@ -79,14 +147,7 @@ export function validateWorkspace(raw: unknown): ValidationResult {
     if (!Number.isInteger(p.year) || (p.year as number) < 1900 || (p.year as number) > 2999) errors.push(`${where}: year is invalid.`);
     else if (years.has(p.year as number)) errors.push(`${where}: there is already a plan for ${p.year}.`);
     if (p.currency !== 'USD') errors.push(`${where}: currency must be USD.`);
-    if (!isPositiveCents(p.annualQuotaCents)) errors.push(`${where}: annual quota must be a positive amount in cents.`);
-    if (!isValidRate(p.baseRate)) errors.push(`${where}: base rate must be greater than 0% and at most 100%.`);
-    if (p.acceleratorRate !== null) {
-      if (!isValidRate(p.acceleratorRate)) errors.push(`${where}: accelerator rate must be greater than 0% and at most 100%.`);
-      else if (isValidRate(p.baseRate) && new D(p.acceleratorRate).lt(p.baseRate)) {
-        errors.push(`${where}: accelerator rate must be at least the base rate.`);
-      }
-    }
+    for (const problem of planShapeProblems(p as Parameters<typeof planShapeProblems>[0])) errors.push(`${where}: ${problem}`);
     if (!isString(p.notes)) errors.push(`${where}: notes must be text.`);
     if (errors.length === before) {
       years.add(p.year as number);
@@ -94,9 +155,10 @@ export function validateWorkspace(raw: unknown): ValidationResult {
         id: p.id as string,
         year: p.year as number,
         currency: 'USD',
-        annualQuotaCents: p.annualQuotaCents as string,
-        baseRate: p.baseRate as string,
-        acceleratorRate: p.acceleratorRate as string | null,
+        period: p.period as Plan['period'],
+        quotasCents: [...(p.quotasCents as string[])],
+        tiers: (p.tiers as Tier[]).map((t) => ({ fromAttainment: t.fromAttainment, rate: t.rate })),
+        tierMode: p.tierMode as Plan['tierMode'],
         notes: p.notes as string,
       });
     }

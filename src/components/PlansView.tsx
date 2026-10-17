@@ -1,26 +1,24 @@
 import { useState, type FormEvent } from 'react';
 import { calculatePlan, compareExpected, type ImpactSummary } from '../lib/calc';
-import { centsToInput, formatCents, sumCents, formatPercent, parseMoneyInput, parsePercentInput, rateToPercentString } from '../lib/money';
+import { centsToInput, D, formatCents, formatPercent, normalizeRate, parseMoneyInput, parsePercentInput, rateToPercentString, sumCents } from '../lib/money';
 import { deletePlan, OpError, savePlan } from '../lib/ops';
-import type { Plan, Workspace } from '../lib/types';
+import type { Plan, QuotaPeriod, Tier, TierMode, Workspace } from '../lib/types';
+import { MAX_TIERS } from '../lib/validate';
 import { useStore } from '../state';
 import { Field, FormError, Modal } from './ui';
 
-export const PLAN_CONFIRMATION = 'My plan uses the credited revenue entered here and a marginal accelerator above an annual quota.';
+export const PLAN_CONFIRMATION = 'My plan uses the credited revenue entered here, with the quota and rates above.';
 
 export function PlanLimitations() {
   return (
     <div className="limitations">
       <h3>What this version supports</h3>
       <p>
-        One plan per calendar year: a commission percentage on credited revenue, plus an optional higher percentage that applies only to
-        revenue above your annual quota.
+        One plan per calendar year with an annual quota or four quarterly quotas, and one or more commission rates that step up as you pass a
+        percentage of quota. Higher rates can apply only above each threshold, or retroactively to everything in the period.
       </p>
       <p>If your plan includes any of these, the numbers here won’t match it, so please don’t rely on them:</p>
       <ul className="limitation-list">
-        <li>Retroactive accelerators (higher rate applied back to the first dollar)</li>
-        <li>More than one accelerator tier</li>
-        <li>Quarterly quota resets</li>
         <li>Split commissions</li>
         <li>Commission caps</li>
         <li>Recoverable draws</li>
@@ -28,12 +26,21 @@ export function PlanLimitations() {
         <li>SPIFFs or bonuses</li>
         <li>Clawbacks or negative revenue adjustments</li>
         <li>Plan changes partway through the year</li>
+        <li>Quarterly quotas with annual accelerators</li>
       </ul>
       <p className="muted">
         Salary and OTE aren’t needed. Commission rates come straight from your plan document, not from your pay targets.
       </p>
     </div>
   );
+}
+
+/** "10%, 15% from 100% of quota" plus how higher tiers pay. */
+export function describeTiers(plan: Pick<Plan, 'tiers' | 'tierMode'>): string {
+  const text = plan.tiers
+    .map((t, i) => (i === 0 ? formatPercent(t.rate) : `${formatPercent(t.rate)} from ${rateToPercentString(t.fromAttainment)}% of quota`))
+    .join(', ');
+  return plan.tiers.length > 1 ? `${text} (${plan.tierMode === 'retroactive' ? 'retroactive' : 'marginal'})` : text;
 }
 
 function ImpactReview({ impact, year, dealCount }: { impact: ImpactSummary; year: number; dealCount: number }) {
@@ -73,13 +80,32 @@ interface PlanFormProps {
   submitLabel?: string;
 }
 
+interface TierDraft {
+  /** Percent of quota, as typed (the first tier is fixed at 0). */
+  from: string;
+  /** Percent rate, as typed. */
+  rate: string;
+}
+
+const QUARTERS = ['Q1', 'Q2', 'Q3', 'Q4'];
+
 export function PlanForm({ existing, onSaved, onCancel, submitLabel }: PlanFormProps) {
   const { ws, commit } = useStore();
   const [year, setYear] = useState(existing ? String(existing.year) : String(new Date().getFullYear()));
-  const [quota, setQuota] = useState(existing ? centsToInput(existing.annualQuotaCents) : '');
-  const [base, setBase] = useState(existing ? rateToPercentString(existing.baseRate) : '');
-  const [hasAccel, setHasAccel] = useState(existing ? existing.acceleratorRate !== null : true);
-  const [accel, setAccel] = useState(existing?.acceleratorRate ? rateToPercentString(existing.acceleratorRate) : '');
+  const [period, setPeriod] = useState<QuotaPeriod>(existing?.period ?? 'annual');
+  const [annualQuota, setAnnualQuota] = useState(existing?.period === 'annual' ? centsToInput(existing.quotasCents[0]) : '');
+  const [quarterQuotas, setQuarterQuotas] = useState<string[]>(
+    existing?.period === 'quarterly' ? existing.quotasCents.map(centsToInput) : ['', '', '', ''],
+  );
+  const [tiers, setTiers] = useState<TierDraft[]>(
+    existing
+      ? existing.tiers.map((t) => ({ from: rateToPercentString(t.fromAttainment), rate: rateToPercentString(t.rate) }))
+      : [
+          { from: '0', rate: '' },
+          { from: '100', rate: '' },
+        ],
+  );
+  const [tierMode, setTierMode] = useState<TierMode>(existing?.tierMode ?? 'marginal');
   const [notes, setNotes] = useState(existing?.notes ?? '');
   const [confirmed, setConfirmed] = useState(Boolean(existing));
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -88,24 +114,60 @@ export function PlanForm({ existing, onSaved, onCancel, submitLabel }: PlanFormP
   const [saving, setSaving] = useState(false);
 
   const dealCount = existing ? ws.deals.filter((d) => d.planId === existing.id).length : 0;
+  const periodWord = period === 'quarterly' ? 'quarter' : 'year';
+
+  function setTier(i: number, patch: Partial<TierDraft>) {
+    setTiers((ts) => ts.map((t, j) => (j === i ? { ...t, ...patch } : t)));
+  }
+
+  function addTier() {
+    setTiers((ts) => {
+      const last = ts.length > 1 ? Number(ts[ts.length - 1].from) : 0;
+      const next = Number.isFinite(last) && last > 0 ? last + 50 : 100;
+      return [...ts, { from: String(next), rate: '' }];
+    });
+  }
 
   function build(): Workspace | null {
     const errs: Record<string, string> = {};
     const y = Number(year);
     if (!/^\d{4}$/.test(year.trim())) errs.year = 'Enter a four-digit year, like 2026.';
-    const q = parseMoneyInput(quota, 'Annual quota');
-    if (!q.ok) errs.quota = q.error;
-    const b = parsePercentInput(base, 'Base commission rate');
-    if (!b.ok) errs.base = b.error;
-    let a: string | null = null;
-    if (hasAccel) {
-      const parsed = parsePercentInput(accel, 'Accelerator rate');
-      if (!parsed.ok) errs.accel = parsed.error;
-      else {
-        a = parsed.value;
-        if (b.ok && Number(parsed.value) < Number(b.value)) errs.accel = 'Accelerator rate must be at least the base rate.';
-      }
+    const quotasCents: string[] = [];
+    if (period === 'annual') {
+      const q = parseMoneyInput(annualQuota, 'Annual quota');
+      if (!q.ok) errs.quota = q.error;
+      else quotasCents.push(q.value);
+    } else {
+      quarterQuotas.forEach((raw, i) => {
+        const q = parseMoneyInput(raw, `${QUARTERS[i]} quota`);
+        if (!q.ok) errs[`quota${i}`] = q.error;
+        else quotasCents.push(q.value);
+      });
     }
+    const parsedTiers: Tier[] = [];
+    const rates: Array<string | null> = [];
+    tiers.forEach((t, i) => {
+      const r = parsePercentInput(t.rate, i === 0 ? 'Base commission rate' : `Tier ${i + 1} rate`);
+      if (!r.ok) errs[`rate${i}`] = r.error;
+      let from = '0.0';
+      if (i > 0) {
+        const cleaned = t.from.trim().replace(/%$/, '').trim();
+        if (!/^\d+(\.\d{1,4})?$/.test(cleaned) || Number(cleaned) <= 0 || Number(cleaned) > 10000) {
+          errs[`from${i}`] = 'Enter a percentage of quota greater than 0, like 100 or 150.';
+        } else {
+          from = normalizeRate(new D(cleaned).div(100));
+          if (i > 1 && Number(cleaned) <= Number(tiers[i - 1].from)) errs[`from${i}`] = 'Each tier must start higher than the one before it.';
+        }
+      }
+      rates.push(r.ok ? r.value : null);
+      if (r.ok) {
+        const prev = i > 0 ? rates[i - 1] : null;
+        if (prev !== null && new D(r.value).lt(prev)) {
+          errs[`rate${i}`] = 'Each tier’s rate must be at least the rate before it.';
+        }
+        parsedTiers.push({ fromAttainment: from, rate: r.value });
+      }
+    });
     if (!confirmed) errs.confirm = 'Please confirm your plan works this way, or check the list of unsupported features above.';
     setErrors(errs);
     if (Object.keys(errs).length) {
@@ -116,9 +178,10 @@ export function PlanForm({ existing, onSaved, onCancel, submitLabel }: PlanFormP
       return savePlan(ws, {
         id: existing?.id,
         year: y,
-        annualQuotaCents: (q as { value: string }).value,
-        baseRate: (b as { value: string }).value,
-        acceleratorRate: a,
+        period,
+        quotasCents,
+        tiers: parsedTiers,
+        tierMode: parsedTiers.length > 1 ? tierMode : 'marginal',
         notes,
       });
     } catch (e) {
@@ -180,21 +243,85 @@ export function PlanForm({ existing, onSaved, onCancel, submitLabel }: PlanFormP
           )}
         </Field>
         <Field label="Currency">{(p) => <input {...p} value="USD" disabled readOnly />}</Field>
+      </div>
+
+      <fieldset className="choice-group">
+        <legend>Quota is measured</legend>
+        <label className="check-row">
+          <input type="radio" name="period" checked={period === 'annual'} onChange={() => setPeriod('annual')} />
+          Over the whole year
+        </label>
+        <label className="check-row">
+          <input type="radio" name="period" checked={period === 'quarterly'} onChange={() => setPeriod('quarterly')} />
+          Each quarter (attainment starts over every quarter)
+        </label>
+      </fieldset>
+      {period === 'annual' ? (
         <Field label="Annual quota (credited revenue, $)" error={errors.quota} help="The credited revenue you need to reach for the year.">
-          {(p) => <input {...p} inputMode="decimal" value={quota} onChange={(e) => setQuota(e.target.value)} placeholder="100000" />}
+          {(p) => <input {...p} inputMode="decimal" value={annualQuota} onChange={(e) => setAnnualQuota(e.target.value)} placeholder="100000" />}
         </Field>
-        <Field label="Base commission rate (%)" error={errors.base} help="Paid on credited revenue up to quota.">
-          {(p) => <input {...p} inputMode="decimal" value={base} onChange={(e) => setBase(e.target.value)} placeholder="10" />}
-        </Field>
-      </div>
-      <div className="check-row">
-        <input id="has-accel" type="checkbox" checked={hasAccel} onChange={(e) => setHasAccel(e.target.checked)} />
-        <label htmlFor="has-accel">My plan pays a higher rate on revenue above quota</label>
-      </div>
-      {hasAccel && (
-        <Field label="Accelerator rate (%)" error={errors.accel} help="Paid only on the credited revenue above your annual quota.">
-          {(p) => <input {...p} inputMode="decimal" value={accel} onChange={(e) => setAccel(e.target.value)} placeholder="15" />}
-        </Field>
+      ) : (
+        <div className="form-grid quarter-grid">
+          {QUARTERS.map((q, i) => (
+            <Field key={q} label={`${q} quota ($)`} error={errors[`quota${i}`]}>
+              {(p) => (
+                <input
+                  {...p}
+                  inputMode="decimal"
+                  value={quarterQuotas[i]}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setQuarterQuotas((qs) => qs.map((x, j) => (j === i ? v : x)));
+                  }}
+                  placeholder="25000"
+                />
+              )}
+            </Field>
+          ))}
+        </div>
+      )}
+
+      <h3 className="tiers-title">Commission rates</h3>
+      <ol className="tier-list">
+        {tiers.map((t, i) => (
+          <li key={i} className="tier-row">
+            {i === 0 ? (
+              <Field label="Base commission rate (%)" error={errors.rate0} help="Paid from the first dollar of credited revenue.">
+                {(p) => <input {...p} inputMode="decimal" value={t.rate} onChange={(e) => setTier(0, { rate: e.target.value })} placeholder="10" />}
+              </Field>
+            ) : (
+              <>
+                <Field label={`Tier ${i + 1} starts at (% of quota)`} error={errors[`from${i}`]}>
+                  {(p) => <input {...p} inputMode="decimal" value={t.from} onChange={(e) => setTier(i, { from: e.target.value })} placeholder="100" />}
+                </Field>
+                <Field label={`Tier ${i + 1} rate (%)`} error={errors[`rate${i}`]}>
+                  {(p) => <input {...p} inputMode="decimal" value={t.rate} onChange={(e) => setTier(i, { rate: e.target.value })} placeholder="15" />}
+                </Field>
+                <button type="button" className="btn btn-small btn-quiet tier-remove" onClick={() => setTiers((ts) => ts.filter((_, j) => j !== i))}>
+                  Remove<span className="sr-only"> tier {i + 1}</span>
+                </button>
+              </>
+            )}
+          </li>
+        ))}
+      </ol>
+      {tiers.length < MAX_TIERS && (
+        <button type="button" className="btn btn-small" onClick={addTier}>
+          {tiers.length === 1 ? 'Add a higher rate above a % of quota' : 'Add another tier'}
+        </button>
+      )}
+      {tiers.length > 1 && (
+        <fieldset className="choice-group">
+          <legend>When you pass a tier, the higher rate applies to</legend>
+          <label className="check-row">
+            <input type="radio" name="tier-mode" checked={tierMode === 'marginal'} onChange={() => setTierMode('marginal')} />
+            Only the revenue above that point
+          </label>
+          <label className="check-row">
+            <input type="radio" name="tier-mode" checked={tierMode === 'retroactive'} onChange={() => setTierMode('retroactive')} />
+            All revenue so far in the {periodWord} (retroactive). The catch-up shows on the deal that crosses the line.
+          </label>
+        </fieldset>
       )}
       <Field label="Notes (optional)">{(p) => <textarea {...p} rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} />}</Field>
 
@@ -257,7 +384,7 @@ export function PlansView() {
           Add a plan year
         </button>
       </div>
-      <p className="muted">One plan per calendar year. Quota attainment starts over each January 1.</p>
+      <p className="muted">One plan per calendar year. Quota attainment starts over each January 1, or each quarter on a quarterly plan.</p>
       <FormError message={error} />
       <div className="plan-list">
         {ws.plans.map((p) => {
@@ -268,16 +395,12 @@ export function PlansView() {
               <h2>{p.year} plan</h2>
               <dl className="kv">
                 <div>
-                  <dt>Annual quota</dt>
-                  <dd className="num">{formatCents(p.annualQuotaCents)}</dd>
+                  <dt>{p.period === 'quarterly' ? 'Quarterly quotas' : 'Annual quota'}</dt>
+                  <dd className="num">{p.quotasCents.map((q) => formatCents(q)).join(' · ')}</dd>
                 </div>
                 <div>
-                  <dt>Base rate</dt>
-                  <dd className="num">{formatPercent(p.baseRate)}</dd>
-                </div>
-                <div>
-                  <dt>Above quota</dt>
-                  <dd className="num">{p.acceleratorRate ? formatPercent(p.acceleratorRate) : 'No accelerator'}</dd>
+                  <dt>Rates</dt>
+                  <dd>{describeTiers(p)}</dd>
                 </div>
                 <div>
                   <dt>Deals</dt>
