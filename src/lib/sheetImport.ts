@@ -156,8 +156,11 @@ export function buildSheet(raw: string[][]): Sheet | { error: string } {
   });
   const rows: string[][] = [];
   const rowNumbers: number[] = [];
+  const headerKey = raw[headerIdx].map((c) => c.trim().toLowerCase()).join('|');
   for (let i = headerIdx + 1; i < raw.length; i++) {
     if (isBlankRow(raw[i])) continue;
+    // Multi-page reports repeat the column names on every page.
+    if (raw[i].map((c) => c.trim().toLowerCase()).join('|') === headerKey) continue;
     rows.push(Array.from({ length: width }, (_, c) => (raw[i][c] ?? '').trim()));
     rowNumbers.push(i + 1);
   }

@@ -7,6 +7,7 @@ import type { Payment } from '../lib/types';
 import { useStore } from '../state';
 import { Field, FormError, Modal } from './ui';
 import { SpreadsheetImportButton } from './SpreadsheetImport';
+import { AutoMatchButton } from './AutoMatch';
 
 /**
  * Record or edit a payment and split it across deals in one step. For a new
@@ -255,8 +256,12 @@ export function PaymentsView() {
       {totalUnallocated.gt(0) && (
         <div className="notice notice-amber" role="status">
           <p>
-            <strong>{formatCents(totalUnallocated)} isn’t matched to deals yet.</strong> Edit a payment to say which deals it paid for.
+            <strong>{formatCents(totalUnallocated)} isn’t matched to deals yet.</strong> Let us suggest which deals each payment covered, or
+            edit a payment to say yourself.
           </p>
+          <div className="actions-inline">
+            <AutoMatchButton />
+          </div>
         </div>
       )}
       <FormError message={error} />

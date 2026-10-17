@@ -78,6 +78,22 @@ These limits show up during plan setup, and you have to confirm your plan fits b
 
 Files in this exact format import with their IDs and same-day order kept. Imports show a preview and report errors by row, and a file with any invalid row imports nothing. Blank IDs get new UUIDs. An ID that already exists blocks the import instead of overwriting anything. Rows are never deduplicated by account name. Exported text cells that start with `=`, `+`, `-`, `@`, tab, or carriage return get an apostrophe prefix to block spreadsheet formula injection, and that prefix is removed again on import.
 
+### Matching payments to deals automatically
+
+Payroll usually pays several deals in one lump. **Match automatically** (on Payments, and on the Overview whenever payments are unmatched) proposes which deals each unmatched payment covered:
+
+- **Adds up exactly:** a set of deals, expected around the payment date and with money still outstanding, sums to the payment to the cent. When several sets fit, the one with expected payment dates closest to the payment date wins.
+- **Best guess:** when nothing adds up exactly, deals due by the payment date are filled closest-first (this pay cycle before older catch-up), and any deal that only partly fits is shown as partly paid. These are the payments most worth a look.
+- **Where it looks:** deals expected up to 120 days before or 45 days after the payment date, never a deal that closed after the payment.
+- **Review first:** every suggestion is shown first and can be unchecked, and payments that already have matches are left alone.
+
+### PDF paystubs and statements
+
+- **Paystubs:** pick one or several PDFs on **Import statement** (Payments). For each one we read the pay date and the current-period commission earnings lines, using the "Current" column when the earnings table has one and leaving out salary, taxes, net pay, and year-to-date figures. You review and can edit every date and amount before importing. Negative commission lines (clawbacks) are flagged, not imported. Re-importing the same paystub is caught.
+- **Table-style PDF reports** (a closed-won report, a commission statement) go through the same column matching as spreadsheets. Column names repeated on each page are skipped.
+- **Limits:** scanned image-only PDFs have no text to read, and the app says so. Password-protected PDFs need an unlocked copy. Paystub layouts vary a lot, so always check what was found.
+- The PDF reader (pdf.js) loads only when a PDF is picked.
+
 ### Spreadsheet import (any layout)
 
 **Import from spreadsheet** (Overview), **Import statement** (Payments), and the import buttons on **Backup & files** accept any CSV or Excel `.xlsx` file, such as a CRM opportunity export, a commission statement, or a personal tracker. Everything happens in the browser.
