@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { calculatePlan, compareExpected, reconcile } from './calc';
+import { calculatePlan, compareExpected, reconcile, suggestAllocations } from './calc';
+import { D } from './money';
 import { demoWorkspace, DEMO_AS_OF } from './demo';
 import { deleteDeal, moveDealSameDay, OpError, saveDeal, setPaymentAllocations, savePayment } from './ops';
 import { deal, payment, plan, ws } from './testHelpers';
@@ -314,5 +315,39 @@ describe('demo workspace', () => {
     expect(s(byAccount.Cedar.differenceCents)).toBe('5000');
     expect(byAccount.Acme.status).toBe('matched');
     expect(byAccount.Delta.status).toBe('upcoming');
+  });
+});
+
+describe('suggested allocations', () => {
+  it('fills the oldest due deals first and leaves the rest unallocated', () => {
+    const p = plan();
+    const acme = deal(p, 60000, '2026-01-10', { expectedPaymentDate: '2026-02-15' });
+    const beacon = deal(p, 50000, '2026-02-10', { expectedPaymentDate: '2026-03-15' });
+    const later = deal(p, 5000, '2026-03-01', { expectedPaymentDate: '2026-04-15' });
+    const w = ws({ plans: [p], deals: [beacon, later, acme] });
+    const out = suggestAllocations(w, '2026-03-15', new D('1200000'));
+    expect(s(out.get(acme.id)!)).toBe('600000');
+    expect(s(out.get(beacon.id)!)).toBe('550000');
+    expect(out.has(later.id)).toBe(false); // not due yet; $500 stays unallocated
+  });
+
+  it('skips what other payments already covered, but not the payment being edited', () => {
+    const p = plan();
+    const acme = deal(p, 60000, '2026-01-10', { expectedPaymentDate: '2026-02-15' });
+    const beacon = deal(p, 50000, '2026-02-10', { expectedPaymentDate: '2026-03-15' });
+    const feb = payment('2026-02-15', '400000');
+    const mar = payment('2026-03-15', '500000');
+    const w = ws({
+      plans: [p],
+      deals: [acme, beacon],
+      payments: [feb, mar],
+      allocations: [
+        { id: 'a1', paymentId: feb.id, dealId: acme.id, amountCents: '400000' },
+        { id: 'a2', paymentId: mar.id, dealId: acme.id, amountCents: '200000' },
+      ],
+    });
+    const out = suggestAllocations(w, '2026-03-15', new D('500000'), mar.id);
+    expect(s(out.get(acme.id)!)).toBe('200000');
+    expect(s(out.get(beacon.id)!)).toBe('300000');
   });
 });

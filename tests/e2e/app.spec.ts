@@ -12,7 +12,7 @@ async function createPlan(page: Page) {
   await expect(page.getByText('Retroactive accelerators')).toBeVisible();
   await page.getByLabel('My plan uses the credited revenue entered here and a marginal accelerator above an annual quota.').check();
   await page.getByRole('button', { name: 'Save plan and continue' }).click();
-  await expect(page.getByTestId('expected-due')).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Deals in 2026' })).toBeVisible();
 }
 
 async function addDeal(page: Page, account: string, revenue: string, close: string, expected: string) {
@@ -28,7 +28,14 @@ async function addDeal(page: Page, account: string, revenue: string, close: stri
 }
 
 async function setAsOf(page: Page, date: string) {
-  await page.getByLabel('As of').fill(date);
+  const input = page.getByLabel('As of');
+  if (!(await input.isVisible())) await page.getByRole('button', { name: 'Change date' }).click();
+  await input.fill(date);
+}
+
+async function openSettings(page: Page, item: 'Commission plan' | 'Backup & files') {
+  await page.getByRole('button', { name: 'Settings' }).click();
+  await page.locator('#settings-menu').getByRole('button', { name: item }).click();
 }
 
 test('full workflow: plan, deals, partial payment, allocation, persistence, inquiry, backup', async ({ page }) => {
@@ -41,27 +48,25 @@ test('full workflow: plan, deals, partial payment, allocation, persistence, inqu
   await expect(page.getByTestId('expected-due')).toHaveText('$11,500.00');
   await expect(page.getByTestId('deal-row-Later Co')).toContainText('Upcoming');
 
-  // Record a partial payment and allocate it across two deals.
+  // Record a partial payment; the split across two deals is suggested in the same form.
   await page.getByRole('button', { name: 'Payments', exact: true }).click();
   await page.getByRole('button', { name: 'Record payment' }).click();
   const payDialog = page.getByRole('dialog', { name: 'Record a payment' });
   await payDialog.getByLabel('Payment date').fill('2026-03-15');
   await payDialog.getByLabel('Gross commission amount ($)').fill('9000');
   await payDialog.getByLabel('Statement or reference (optional)').fill('March statement');
-  await payDialog.getByRole('button', { name: 'Save payment' }).click();
-
-  const alloc = page.getByRole('dialog', { name: /Allocate the Mar 15, 2026 payment/ });
-  await expect(alloc).toBeVisible();
+  // Oldest due deal is filled first; the rest goes to the next one.
+  await expect(payDialog.getByRole('textbox', { name: 'Acme' })).toHaveValue('6000');
+  await expect(payDialog.getByRole('textbox', { name: 'Beacon' })).toHaveValue('3000');
   // Deals closing after the payment date are not offered.
-  await expect(alloc.getByRole('textbox', { name: 'Later Co' })).toHaveCount(0);
-  await alloc.getByRole('textbox', { name: 'Acme' }).fill('6000');
-  await alloc.getByRole('textbox', { name: 'Beacon' }).fill('4000');
-  await expect(alloc.getByText('Allocations can’t add up to more than the payment')).toBeVisible();
-  await expect(alloc.getByRole('button', { name: 'Save allocations' })).toBeDisabled();
-  await alloc.getByRole('textbox', { name: 'Beacon' }).fill('3000');
-  await expect(alloc.getByTestId('alloc-remaining')).toHaveText('$0.00');
-  await alloc.getByRole('button', { name: 'Save allocations' }).click();
-  await expect(alloc).toBeHidden();
+  await expect(payDialog.getByRole('textbox', { name: 'Later Co' })).toHaveCount(0);
+  await payDialog.getByRole('textbox', { name: 'Beacon' }).fill('4000');
+  await expect(payDialog.getByText('Allocations can’t add up to more than the payment')).toBeVisible();
+  await expect(payDialog.getByRole('button', { name: 'Save payment' })).toBeDisabled();
+  await payDialog.getByRole('textbox', { name: 'Beacon' }).fill('3000');
+  await expect(payDialog.getByTestId('alloc-remaining')).toHaveText('$0.00');
+  await payDialog.getByRole('button', { name: 'Save payment' }).click();
+  await expect(payDialog).toBeHidden();
   await expect(page.getByText('Fully allocated')).toBeVisible();
 
   // Inspect the discrepancy.
@@ -102,7 +107,7 @@ test('full workflow: plan, deals, partial payment, allocation, persistence, inqu
   await expect(inquiry).toBeHidden();
 
   // Export a backup.
-  await page.getByRole('button', { name: 'Backup & files' }).click();
+  await openSettings(page, 'Backup & files');
   const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Export backup' }).click()]);
   const backupPath = test.info().outputPath('backup.json');
   await download.saveAs(backupPath);
@@ -116,12 +121,12 @@ test('full workflow: plan, deals, partial payment, allocation, persistence, inqu
   await expect(confirmDelete.getByTestId('deal-impact')).toContainText('2 other deals');
   await confirmDelete.getByRole('button', { name: 'Delete deal' }).click();
   await expect(page.getByTestId('deal-row-Acme')).toHaveCount(0);
-  await expect(page.getByText('Allocate payments to finish the comparison.')).toBeVisible();
+  await expect(page.getByText('Match your payments to deals to finish the comparison.')).toBeVisible();
   await page.getByRole('button', { name: 'Payments', exact: true }).click();
   await expect(page.getByText('$6,000.00 unallocated')).toBeVisible();
 
   // Restore the backup.
-  await page.getByRole('button', { name: 'Backup & files' }).click();
+  await openSettings(page, 'Backup & files');
   await page.locator('#restore-file').setInputFiles(backupPath);
   const restore = page.getByRole('dialog', { name: 'Restore this backup?' });
   await expect(restore).toContainText('Deals');
@@ -149,6 +154,7 @@ test('demo mode shows exact totals and never overwrites personal records', async
   await expect(page.getByTestId('difference')).toHaveText('$550.00');
   await expect(page.getByTestId('difference-explainer')).toContainText('Beacon: +$500.00');
   await expect(page.getByTestId('difference-explainer')).toContainText('Cedar: +$50.00');
+  await page.getByText('Show all the numbers').click();
   await expect(page.locator('.stats')).toContainText('$1,500.00');
   await expect(page.getByTestId('deal-row-My Real Deal')).toHaveCount(0);
 
@@ -172,7 +178,7 @@ test('demo mode shows exact totals and never overwrites personal records', async
 
 test('CSV import previews, rejects invalid files atomically, and imports valid ones', async ({ page }) => {
   await createPlan(page);
-  await page.getByRole('button', { name: 'Backup & files' }).click();
+  await openSettings(page, 'Backup & files');
   const bad = 'deal_id,plan_year,account,reference,credited_revenue_usd,close_date,expected_payment_date,same_day_order,notes\n,2026,Good,,100,2026-01-10,2026-02-15,,\n,2026,Bad,,abc,2026-01-10,2026-02-15,,\n';
   await page.locator('#deal-csv').setInputFiles({ name: 'bad.csv', mimeType: 'text/csv', buffer: Buffer.from(bad) });
   const dlg = page.getByRole('dialog', { name: /Import deals/ });
@@ -219,17 +225,19 @@ for (const viewport of [
         .locator('td')
         .first()
         .evaluate((el) => getComputedStyle(el, '::before').content);
-      expect(label).toContain('Credited revenue');
+      expect(label).toContain('Expected payment');
     }
     await page.getByRole('button', { name: 'Beacon, view calculation' }).click();
     await noScroll();
     await page.keyboard.press('Escape');
-    for (const tab of ['Payments', 'Plan', 'Backup & files']) {
-      await page.getByRole('button', { name: tab, exact: true }).click();
+    await page.getByRole('button', { name: 'Payments', exact: true }).click();
+    await noScroll();
+    for (const item of ['Commission plan', 'Backup & files'] as const) {
+      await openSettings(page, item);
       await noScroll();
     }
     await page.getByRole('button', { name: 'Payments', exact: true }).click();
-    await page.getByRole('button', { name: /Allocate payment from March 15, 2026/ }).click();
+    await page.getByRole('button', { name: /Edit payment from March 15, 2026/ }).click();
     await noScroll();
   });
 }
@@ -239,7 +247,7 @@ test('editing the plan previews old and new totals before saving', async ({ page
   await setAsOf(page, '2026-06-30');
   await addDeal(page, 'Acme', '60000', '2026-01-10', '2026-02-15');
   await addDeal(page, 'Beacon', '50000', '2026-02-10', '2026-03-15');
-  await page.getByRole('button', { name: 'Plan', exact: true }).click();
+  await openSettings(page, 'Commission plan');
   await page.getByRole('button', { name: 'Edit 2026 plan' }).click();
   const dlg = page.getByRole('dialog', { name: 'Edit 2026 plan' });
   await dlg.getByLabel('Accelerator rate (%)').fill('20');
@@ -257,7 +265,7 @@ test('a second tab picks up changes instead of overwriting them', async ({ page,
   await createPlan(page);
   const other = await context.newPage();
   await other.goto('/');
-  await expect(other.getByTestId('expected-due')).toBeVisible();
+  await expect(other.getByRole('heading', { name: 'Deals in 2026' })).toBeVisible();
   await addDeal(page, 'From Tab One', '1000', '2026-01-10', '2026-02-15');
   await expect(other.getByTestId('deal-row-From Tab One')).toBeVisible();
   await addDeal(other, 'From Tab Two', '2000', '2026-01-11', '2026-02-15');

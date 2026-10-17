@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Dashboard } from './components/Dashboard';
 import { DataView } from './components/DataView';
 import { PaymentsView } from './components/PaymentsView';
@@ -13,9 +13,73 @@ export type View = 'overview' | 'payments' | 'plans' | 'data';
 const VIEWS: Array<{ id: View; label: string }> = [
   { id: 'overview', label: 'Overview' },
   { id: 'payments', label: 'Payments' },
-  { id: 'plans', label: 'Plan' },
+];
+
+const SETTINGS: Array<{ id: View; label: string }> = [
+  { id: 'plans', label: 'Commission plan' },
   { id: 'data', label: 'Backup & files' },
 ];
+
+/** Small disclosure menu for the set-and-forget screens. */
+function SettingsMenu({ view, onPick }: { view: View; onPick: (v: View) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setOpen(false);
+        ref.current?.querySelector<HTMLButtonElement>('.settings-btn')?.focus();
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  const current = SETTINGS.some((s) => s.id === view);
+  return (
+    <div className="settings" ref={ref}>
+      <button
+        type="button"
+        className={`btn btn-small btn-quiet settings-btn${current ? ' active' : ''}`}
+        aria-expanded={open}
+        aria-controls="settings-menu"
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span aria-hidden="true" className="settings-icon">
+          ⚙
+        </span>
+        <span className="settings-label">Settings</span> <span aria-hidden="true">▾</span>
+      </button>
+      {open && (
+        <ul id="settings-menu" className="settings-menu">
+          {SETTINGS.map((s) => (
+            <li key={s.id}>
+              <button
+                type="button"
+                aria-current={view === s.id ? 'page' : undefined}
+                onClick={() => {
+                  setOpen(false);
+                  onPick(s.id);
+                }}
+              >
+                {s.label}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 function SaveIndicator({ state, error }: { state: SaveState; error: string | null }) {
   let text = '';
@@ -97,6 +161,7 @@ export default function App() {
           </div>
           <div className="topbar-right">
             <SaveIndicator state={store.saveState} error={store.saveError} />
+            {!showWelcome && ws.plans.length > 0 && <SettingsMenu view={view} onPick={setView} />}
             {mode === 'demo' ? (
               <button type="button" className="btn btn-small" onClick={() => void store.exitDemo()}>
                 Exit example

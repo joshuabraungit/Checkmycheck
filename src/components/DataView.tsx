@@ -185,7 +185,7 @@ export function DataView({ year, asOf }: { year: number; asOf: string }) {
 
         <article className="panel">
           <h2 className="h3">Payments (CSV)</h2>
-          <p className="muted">Imported payments start unallocated. Allocate them to deals afterward.</p>
+          <p className="muted">Imported payments start unallocated. Match them to deals afterward on the Payments tab.</p>
           <div className="actions-inline">
             <button type="button" className="btn" onClick={() => downloadText(`${prefix}-payments-${stamp}.csv`, paymentsToCsv(ws))} disabled={!ws.payments.length}>
               Export payments
@@ -246,7 +246,7 @@ export function DataView({ year, asOf }: { year: number; asOf: string }) {
               </p>
               {importState.kind === 'payments' && (
                 <p className="notice notice-amber">
-                  Imported payments start unallocated. After importing, allocate each one to the deals it paid for to finish the comparison.
+                  Imported payments start unallocated. After importing, open each one on the Payments tab and match it to the deals it paid for.
                 </p>
               )}
               <div className="preview-wrap">
