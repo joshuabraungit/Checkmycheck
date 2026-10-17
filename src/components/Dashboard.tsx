@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { reconcile, STATUS_LABELS, type DealReconciliation, type DealStatus } from '../lib/calc';
-import { reconciliationToCsv } from '../lib/csv';
 import { formatDateLong, formatDateShort, isValidDate, todayLocal } from '../lib/dates';
 import { DEMO_AS_OF } from '../lib/demo';
 import { formatCents, type Dec } from '../lib/money';
@@ -8,9 +7,10 @@ import { useStore } from '../state';
 import { DealDetail } from './DealDetail';
 import { DealForm } from './DealForm';
 import { InquiryDialog } from './InquiryDialog';
-import { downloadText } from './ui';
 import { DropZone } from './DropZone';
 import { AutoMatchButton } from './AutoMatch';
+import type { Flash } from '../App';
+import type { Workspace } from '../lib/types';
 
 type SortKey = 'commission' | 'account' | 'expectedDate' | 'expected' | 'received' | 'difference' | 'status';
 
@@ -94,9 +94,12 @@ interface Props {
   asOf: string;
   onAsOf: (d: string) => void;
   onGoToPayments: () => void;
+  flash: Flash | null;
+  onFlash: (f: Flash | null) => void;
+  onUndo: (to: Workspace) => void;
 }
 
-export function Dashboard({ year, years, onYear, asOf, onAsOf, onGoToPayments }: Props) {
+export function Dashboard({ year, years, onYear, asOf, onAsOf, onGoToPayments, flash, onFlash, onUndo }: Props) {
   const { ws, mode } = useStore();
   const [search, setSearch] = useState('');
   const [reviewOnly, setReviewOnly] = useState(false);
@@ -111,7 +114,6 @@ export function Dashboard({ year, years, onYear, asOf, onAsOf, onGoToPayments }:
 
   const rec = useMemo(() => reconcile(ws, year, asOf), [ws, year, asOf]);
   const empty = !ws.deals.length && !ws.payments.length;
-  const [dropMessage, setDropMessage] = useState<string | null>(null);
   const { summary } = rec;
   const plan = rec.plan!;
 
@@ -165,6 +167,16 @@ export function Dashboard({ year, years, onYear, asOf, onAsOf, onGoToPayments }:
         Overview
       </h1>
 
+      {flash && (
+        <p className="success drop-message" role="status">
+          {flash.text}{' '}
+          {flash.undoTo && (
+            <button type="button" className="link-btn" onClick={() => onUndo(flash.undoTo!)}>
+              Undo
+            </button>
+          )}
+        </p>
+      )}
       {empty ? (
         <div className="start panel">
           <h2>Add your deals and paystubs</h2>
@@ -172,7 +184,7 @@ export function Dashboard({ year, years, onYear, asOf, onAsOf, onGoToPayments }:
             That’s all it takes to check your commission. We’ll work out what each file is, match payments to deals, and show you what’s
             missing.
           </p>
-          <DropZone onAdded={setDropMessage} />
+          <DropZone onAdded={(text, undoTo) => onFlash({ text, undoTo })} />
           <p className="muted small">
             Prefer typing?{' '}
             <button type="button" className="link-btn" onClick={() => setForm({})}>
@@ -182,16 +194,11 @@ export function Dashboard({ year, years, onYear, asOf, onAsOf, onGoToPayments }:
         </div>
       ) : (
         <>
-      {dropMessage && (
-        <p className="success drop-message" role="status">
-          {dropMessage}
-        </p>
-      )}
       {summary.provisional && (
         <div className="notice notice-amber" role="status">
           <p>
-            <strong>Some payments need a quick look.</strong> {formatCents(summary.unallocatedCents)} isn’t matched to deals yet, so the
-            numbers below are provisional.
+            <strong>Some payments need a quick look.</strong> {formatCents(summary.unallocatedCents)} isn’t matched to deals yet, so these
+            numbers aren’t final yet.
           </p>
           <div className="actions-inline">
             <AutoMatchButton label="Review matches" />
@@ -253,7 +260,7 @@ export function Dashboard({ year, years, onYear, asOf, onAsOf, onGoToPayments }:
 
         <h2 className="hero-title">
           {headline}
-          {summary.provisional && <span className="tag">Provisional</span>}
+          {summary.provisional && <span className="tag">Not final yet</span>}
         </h2>
         {summary.dueDealCount > 0 && (
           <p className="hero-sub">
@@ -292,7 +299,7 @@ export function Dashboard({ year, years, onYear, asOf, onAsOf, onGoToPayments }:
         )}
       </div>
 
-      <DropZone compact onAdded={setDropMessage} />
+      <DropZone compact onAdded={(text, undoTo) => onFlash({ text, undoTo })} />
 
       <details className="more-numbers">
         <summary>Show all the numbers</summary>
@@ -336,14 +343,6 @@ export function Dashboard({ year, years, onYear, asOf, onAsOf, onGoToPayments }:
         <div className="actions-inline">
           <button type="button" className="btn btn-primary" onClick={() => setForm({})}>
             Add deal
-          </button>
-          <button
-            type="button"
-            className="btn"
-            onClick={() => downloadText(`reconciliation-${year}-as-of-${asOf}.csv`, reconciliationToCsv(rec.rows, asOf, year))}
-            disabled={!rec.rows.length}
-          >
-            Export report
           </button>
         </div>
       </div>

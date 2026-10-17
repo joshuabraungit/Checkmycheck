@@ -1469,3 +1469,92 @@ label.btn[aria-disabled='true'] {
     clip: rect(0, 0, 0, 0);
   }
 }
+
+/* Landing */
+.landing {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
+  gap: 2rem;
+  align-items: center;
+  padding: 2.5rem 2.5rem 2rem;
+  margin-top: 1rem;
+  transition: border-color 0.15s, background 0.15s;
+}
+.landing.is-dragging {
+  border-color: var(--green);
+  background: var(--green-soft);
+}
+.landing h1 {
+  font-size: 2.6rem;
+  line-height: 1.12;
+  letter-spacing: -0.02em;
+  margin-bottom: 1rem;
+}
+.landing .lead {
+  max-width: 52ch;
+  margin-bottom: 1.5rem;
+}
+.landing-need {
+  margin: 1.25rem 0 0.5rem;
+  max-width: 60ch;
+}
+.landing-fine {
+  margin: 0;
+}
+.landing-art {
+  width: 100%;
+  height: auto;
+}
+.btn-dark {
+  background: var(--text);
+  border-color: var(--text);
+  color: #fff;
+  font-weight: 600;
+}
+.btn-dark:hover {
+  background: #000;
+}
+.strong-link {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* Three plan questions */
+.quick-plan {
+  margin-top: 1rem;
+  padding: 2rem;
+}
+.quick-plan h1 {
+  font-size: 1.7rem;
+}
+.quick-plan .field input {
+  max-width: 16rem;
+}
+.plan-fit {
+  font-size: 0.9rem;
+  color: var(--muted);
+  margin: 0.5rem 0 0;
+}
+.plan-fit summary {
+  cursor: pointer;
+}
+.plan-fit ul {
+  margin: 0.4rem 0 0;
+  padding-left: 1.2rem;
+}
+
+@media (max-width: 720px) {
+  .landing {
+    grid-template-columns: 1fr;
+    padding: 1.5rem 1.25rem;
+  }
+  .landing-art {
+    display: none;
+  }
+  .landing h1 {
+    font-size: 1.9rem;
+  }
+  .quick-plan {
+    padding: 1.25rem;
+  }
+}

@@ -1,6 +1,7 @@
 import { useId, useMemo, useRef, useState, type DragEvent } from 'react';
-import { analyzeDrop, applyDrop, sourceItems, type DroppedFile, type Source } from '../lib/dropImport';
-import { formatDateLong, formatDateShort } from '../lib/dates';
+import { analyzeDrop, applyDrop, autoDrop, dropMessage, sourceItems, type DroppedFile, type Source } from '../lib/dropImport';
+import type { Workspace } from '../lib/types';
+import { formatDateLong } from '../lib/dates';
 import { formatCents, sumCents } from '../lib/money';
 import { extractPaystub, linesToRows } from '../lib/pdfText';
 import { isExcelFile, isPdfFile, readSpreadsheetFile } from '../lib/readSpreadsheet';
@@ -9,7 +10,7 @@ import { useStore } from '../state';
 import { readPdfLines } from './PaystubImport';
 import { FormError, Modal } from './ui';
 
-async function readDropped(file: File): Promise<DroppedFile> {
+export async function readDropped(file: File): Promise<DroppedFile> {
   try {
     if (isPdfFile(file.name)) {
       const lines = await readPdfLines(file);
@@ -91,7 +92,15 @@ function SourceSummary({ s }: { s: Source }) {
   );
 }
 
-function DropReview({ files, onClose, onDone }: { files: DroppedFile[]; onClose: () => void; onDone: (m: string) => void }) {
+export function DropReview({
+  files,
+  onClose,
+  onDone,
+}: {
+  files: DroppedFile[];
+  onClose: () => void;
+  onDone: (m: string, undoTo: Workspace) => void;
+}) {
   const { ws, commit } = useStore();
   const [dateOrder, setDateOrder] = useState<DateOrder | null>(null);
   const [daysText, setDaysText] = useState('30');
@@ -100,6 +109,8 @@ function DropReview({ files, onClose, onDone }: { files: DroppedFile[]; onClose:
   const [bestGuesses, setBestGuesses] = useState(true);
   const days = /^\d{1,3}$/.test(daysText.trim()) ? Number(daysText) : null;
   const analysis = useMemo(() => analyzeDrop(files, ws, { dateOrder, expectedPaymentDays: days ?? 30 }), [files, ws, dateOrder, days]);
+  // Keep the day/month question on screen once asked, so the answer can be changed.
+  const [askOrder] = useState(() => analyzeDrop(files, ws, { dateOrder: null, expectedPaymentDays: 30 }).needsDateOrder);
   const deals = analysis.sources.flatMap((s) => sourceItems(s).deals).length;
   const payments = analysis.sources.flatMap((s) => sourceItems(s).payments).length;
   const estimatesDates = analysis.sources.some(
@@ -117,17 +128,7 @@ function DropReview({ files, onClose, onDone }: { files: DroppedFile[]; onClose:
     try {
       const result = applyDrop(ws, analysis.sources, { includeBestGuesses: bestGuesses });
       await commit(result.workspace);
-      const parts = [`Added ${what}.`];
-      if (result.matched) parts.push(`Matched ${plural(result.matched, 'payment')} to deals.`);
-      if (result.guessed.length) {
-        parts.push(
-          `${result.guessed.length === 1 ? 'One was a best guess' : `${result.guessed.length} were best guesses`} because the amounts didn’t add up exactly (${result.guessed
-            .map((p) => formatDateShort(p.paymentDate))
-            .join(', ')}), so check ${result.guessed.length === 1 ? 'it' : 'them'} under Details › Payments.`,
-        );
-      }
-      if (result.unmatched) parts.push(`${plural(result.unmatched, 'payment')} still ${result.unmatched === 1 ? 'needs' : 'need'} matching.`);
-      onDone(parts.join(' '));
+      onDone(dropMessage(analysis, result, days ?? 30), ws);
     } catch (e) {
       setError(`Nothing was added. ${(e as Error).message}`);
     } finally {
@@ -160,8 +161,8 @@ function DropReview({ files, onClose, onDone }: { files: DroppedFile[]; onClose:
         )}
       </ul>
 
-      {analysis.needsDateOrder && (
-        <fieldset className="date-order has-error">
+      {askOrder && (
+        <fieldset className={`date-order${dateOrder ? '' : ' has-error'}`}>
           <legend>Some dates could be read two ways. How should we read 01/02/2026?</legend>
           <div className="check-row">
             <input type="radio" id="drop-mdy" name="drop-order" checked={dateOrder === 'MDY'} onChange={() => setDateOrder('MDY')} />
@@ -218,22 +219,37 @@ function DropReview({ files, onClose, onDone }: { files: DroppedFile[]; onClose:
  * One place to add everything: drag files in or choose them. Works out what
  * each file is, shows one review, and matches what adds up.
  */
-export function DropZone({ compact = false, onAdded }: { compact?: boolean; onAdded?: (message: string) => void }) {
+export function DropZone({
+  compact = false,
+  onAdded,
+}: {
+  compact?: boolean;
+  onAdded: (message: string, undoTo?: Workspace) => void;
+}) {
+  const { ws, commit } = useStore();
   const inputId = useId();
   const ref = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
-  const [reading, setReading] = useState(false);
+  const [busy, setBusy] = useState(false);
   const [files, setFiles] = useState<DroppedFile[] | null>(null);
-  const [status, setStatus] = useState<string | null>(null);
 
   async function take(list: File[]) {
     if (!list.length) return;
-    setStatus(null);
-    setReading(true);
+    setBusy(true);
     try {
-      setFiles(await Promise.all(list.map(readDropped)));
+      const read = await Promise.all(list.map(readDropped));
+      // Only stop to ask when there's something to decide.
+      const auto = autoDrop(read, ws);
+      if (auto.kind === 'review') setFiles(read);
+      else if (auto.kind === 'nothing') onAdded(auto.message);
+      else {
+        await commit(auto.workspace);
+        onAdded(auto.message, ws);
+      }
+    } catch (e) {
+      onAdded(`Nothing was added. ${(e as Error).message}`);
     } finally {
-      setReading(false);
+      setBusy(false);
     }
   }
 
@@ -255,20 +271,17 @@ export function DropZone({ compact = false, onAdded }: { compact?: boolean; onAd
     >
       {compact ? (
         <p className="dropzone-title">
-          <strong>New paystub or deals?</strong> <span className="muted">Drop files here, or</span>
+          <strong>Got a new paystub?</strong> <span className="muted">Drop it here, or</span>
         </p>
       ) : (
         <>
-          <p className="dropzone-title">Drop your files here</p>
-          <p className="muted">
-            Your closed deals (a CRM export or your own tracker) and your paystub PDFs. CSV, Excel, or PDF, as many as you like at once. We’ll
-            work out what each one is.
-          </p>
+          <p className="dropzone-title">Drop your deals and paystubs here</p>
+          <p className="muted">A CRM export or your own spreadsheet, plus your paystub PDFs. As many as you like at once.</p>
         </>
       )}
       <span className="file-picker">
-        <label htmlFor={inputId} className={`btn ${compact ? 'btn-small' : 'btn-primary'}`} aria-disabled={reading || undefined}>
-          {reading ? 'Reading files…' : 'Choose files'}
+        <label htmlFor={inputId} className={`btn ${compact ? 'btn-small' : 'btn-primary'}`} aria-disabled={busy || undefined}>
+          {busy ? 'Reading files…' : compact ? 'Add files' : 'Choose files'}
         </label>
         <input
           ref={ref}
@@ -285,19 +298,13 @@ export function DropZone({ compact = false, onAdded }: { compact?: boolean; onAd
           }}
         />
       </span>
-      {status && (
-        <p className="success dropzone-status" role="status">
-          {status}
-        </p>
-      )}
       {files && (
         <DropReview
           files={files}
           onClose={() => setFiles(null)}
-          onDone={(m) => {
+          onDone={(m, undoTo) => {
             setFiles(null);
-            if (onAdded) onAdded(m);
-            else setStatus(m);
+            onAdded(m, undoTo);
           }}
         />
       )}

@@ -2,13 +2,23 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Dashboard } from './components/Dashboard';
 import { DataView } from './components/DataView';
 import { PaymentsView } from './components/PaymentsView';
-import { PlanSetup, PlansView } from './components/PlansView';
-import { Welcome } from './components/Welcome';
+import { DropReview, readDropped } from './components/DropZone';
+import { Landing } from './components/Landing';
+import { PlansView } from './components/PlansView';
+import { QuickPlan } from './components/QuickPlan';
+import { autoDrop, dealYears, type DroppedFile } from './lib/dropImport';
+import type { Workspace } from './lib/types';
 import { DEMO_AS_OF } from './lib/demo';
 import { formatDateLong, todayLocal, yearOf } from './lib/dates';
 import { useStore, type SaveState } from './state';
 
 export type View = 'overview' | 'payments' | 'plans' | 'data';
+
+/** A one-line result shown above the answer, optionally undoable. */
+export interface Flash {
+  text: string;
+  undoTo?: Workspace;
+}
 
 const SETTINGS: Array<{ id: View; label: string }> = [
   { id: 'payments', label: 'Payments' },
@@ -17,7 +27,7 @@ const SETTINGS: Array<{ id: View; label: string }> = [
 ];
 
 /** Small disclosure menu for the set-and-forget screens. */
-function SettingsMenu({ view, onPick }: { view: View; onPick: (v: View) => void }) {
+function SettingsMenu({ view, onPick, onExample }: { view: View; onPick: (v: View) => void; onExample?: () => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -71,16 +81,37 @@ function SettingsMenu({ view, onPick }: { view: View; onPick: (v: View) => void 
               </button>
             </li>
           ))}
+          {onExample && (
+            <li>
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  onExample();
+                }}
+              >
+                See an example
+              </button>
+            </li>
+          )}
         </ul>
       )}
     </div>
   );
 }
 
+/** Quiet unless something is happening: "Saved" shows briefly, failures stay. */
 function SaveIndicator({ state, error }: { state: SaveState; error: string | null }) {
+  const [fresh, setFresh] = useState(false);
+  useEffect(() => {
+    if (state !== 'saved') return;
+    setFresh(true);
+    const t = setTimeout(() => setFresh(false), 2500);
+    return () => clearTimeout(t);
+  }, [state, error]);
   let text = '';
   if (state === 'saving') text = 'Saving…';
-  else if (state === 'saved') text = 'Saved';
+  else if (state === 'saved' && fresh) text = 'Saved';
   else if (state === 'failed') text = 'Save failed';
   return (
     <span className={`save-indicator save-${state}`} role="status" aria-live="polite" title={error ?? undefined}>
@@ -102,7 +133,12 @@ export default function App() {
   const store = useStore();
   const { ws, mode, loading, loadError } = store;
   const [view, setView] = useState<View>('overview');
-  const [starting, setStarting] = useState(false);
+  const [stage, setStage] = useState<'landing' | 'plan'>('landing');
+  const [pendingFiles, setPendingFiles] = useState<DroppedFile[] | null>(null);
+  const [reviewFiles, setReviewFiles] = useState<DroppedFile[] | null>(null);
+  const [reading, setReading] = useState(false);
+  const [landingMessage, setLandingMessage] = useState<string | null>(null);
+  const [flash, setFlash] = useState<Flash | null>(null);
   const [asOf, setAsOf] = useState(() => (mode === 'demo' ? DEMO_AS_OF : todayLocal()));
   const [year, setYear] = useState<number | null>(null);
 
@@ -110,7 +146,9 @@ export default function App() {
     setAsOf(mode === 'demo' ? DEMO_AS_OF : todayLocal());
     setYear(null);
     setView('overview');
-    setStarting(false);
+    setStage('landing');
+    setPendingFiles(null);
+    setFlash(null);
   }, [mode]);
 
   const years = useMemo(() => ws.plans.map((p) => p.year).sort((a, b) => a - b), [ws.plans]);
@@ -140,7 +178,53 @@ export default function App() {
   }
 
   const isEmpty = !ws.plans.length && !ws.deals.length && !ws.payments.length;
-  const showWelcome = mode === 'personal' && isEmpty && !starting;
+  const showWelcome = mode === 'personal' && isEmpty && stage === 'landing';
+
+  async function takeLandingFiles(list: File[]) {
+    setLandingMessage(null);
+    setReading(true);
+    try {
+      const read = await Promise.all(list.map(readDropped));
+      const usable = read.filter((f) => !('error' in f));
+      if (!usable.length) {
+        setLandingMessage(read.map((f) => ('error' in f ? f.error : '')).find(Boolean) ?? 'Those files couldn’t be read.');
+        return;
+      }
+      setPendingFiles(read);
+      setStage('plan');
+    } finally {
+      setReading(false);
+    }
+  }
+
+  /** Save the new plan, then add whatever was dropped on the landing page. */
+  async function finishPlan(planned: Workspace) {
+    const files = pendingFiles;
+    if (!files) {
+      await store.commit(planned);
+      return;
+    }
+    const auto = autoDrop(files, planned);
+    if (auto.kind === 'applied') {
+      await store.commit(auto.workspace);
+      setFlash({ text: auto.message, undoTo: planned });
+    } else {
+      await store.commit(planned);
+      if (auto.kind === 'review') setReviewFiles(files);
+      else setFlash({ text: auto.message });
+    }
+    setPendingFiles(null);
+    setView('overview');
+  }
+
+  async function undo(to: Workspace) {
+    try {
+      await store.commit(to);
+      setFlash({ text: 'Undone.' });
+    } catch (e) {
+      setFlash({ text: `Couldn’t undo. ${(e as Error).message}` });
+    }
+  }
 
   return (
     <div className="app">
@@ -157,17 +241,13 @@ export default function App() {
           </div>
           <div className="topbar-right">
             <SaveIndicator state={store.saveState} error={store.saveError} />
-            {!showWelcome && ws.plans.length > 0 && <SettingsMenu view={view} onPick={setView} />}
-            {mode === 'demo' ? (
+            {!showWelcome && ws.plans.length > 0 && (
+              <SettingsMenu view={view} onPick={setView} onExample={mode === 'personal' ? () => void store.enterDemo() : undefined} />
+            )}
+            {mode === 'demo' && (
               <button type="button" className="btn btn-small" onClick={() => void store.exitDemo()}>
                 Exit example
               </button>
-            ) : (
-              !showWelcome && (
-                <button type="button" className="btn btn-small btn-quiet" onClick={() => void store.enterDemo()}>
-                  View example
-                </button>
-              )
             )}
           </div>
         </div>
@@ -195,11 +275,28 @@ export default function App() {
 
       {showWelcome ? (
         <main id="main" className="page">
-          <Welcome onStart={() => setStarting(true)} onDemo={() => void store.enterDemo()} />
+          <Landing
+            onFiles={(list) => void takeLandingFiles(list)}
+            onManual={() => {
+              setPendingFiles(null);
+              setStage('plan');
+            }}
+            onDemo={() => void store.enterDemo()}
+            busy={reading}
+            message={landingMessage}
+          />
         </main>
       ) : !ws.plans.length ? (
         <main id="main" className="page narrow">
-          <PlanSetup onDone={() => setView('overview')} onCancel={isEmpty ? () => setStarting(false) : undefined} />
+          <QuickPlan
+            years={pendingFiles && dealYears(pendingFiles).length ? dealYears(pendingFiles) : [yearOf(todayLocal())]}
+            hasFiles={!!pendingFiles}
+            onSaved={finishPlan}
+            onBack={() => {
+              setPendingFiles(null);
+              setStage('landing');
+            }}
+          />
         </main>
       ) : (
         <>
@@ -217,6 +314,9 @@ export default function App() {
                 asOf={asOf}
                 onAsOf={setAsOf}
                 onGoToPayments={() => setView('payments')}
+                flash={flash}
+                onFlash={setFlash}
+                onUndo={(to) => void undo(to)}
               />
             )}
             {view === 'payments' && <PaymentsView />}
@@ -224,6 +324,16 @@ export default function App() {
             {view === 'data' && selectedYear !== null && <DataView year={selectedYear} asOf={asOf} />}
           </main>
         </>
+      )}
+      {reviewFiles && (
+        <DropReview
+          files={reviewFiles}
+          onClose={() => setReviewFiles(null)}
+          onDone={(text, undoTo) => {
+            setReviewFiles(null);
+            setFlash({ text, undoTo });
+          }}
+        />
       )}
       <footer className="footer">
         <p>
