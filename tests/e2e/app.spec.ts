@@ -638,3 +638,25 @@ test('start screen fits small phones', async ({ page }) => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
   }
 });
+
+test('the logo goes home from setup and from the example', async ({ page }) => {
+  const landing = page.getByRole('heading', { name: /You closed the deal\.\s*Did you get paid for it\?/ });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Prefer typing? Enter deals by hand' }).click();
+  await expect(page.getByRole('heading', { name: 'Three quick questions about your plan' })).toBeVisible();
+  await page.getByRole('link', { name: 'Check My Check home' }).click();
+  await expect(landing).toBeVisible();
+
+  await page.getByRole('button', { name: 'Try an example →' }).click();
+  await expect(page.getByText('Example workspace.')).toBeVisible();
+  await page.getByRole('link', { name: 'Check My Check home' }).click();
+  await expect(page.getByText('Example workspace.')).toHaveCount(0);
+  await expect(landing).toBeVisible();
+
+  // With data, home is the summary.
+  await createPlan(page);
+  await addDeal(page, 'Acme', '1000', '2026-01-10', '2026-02-15');
+  await openSettings(page, 'Commission plan');
+  await page.getByRole('link', { name: 'Check My Check home' }).click();
+  await expect(page.getByTestId('deal-row-Acme')).toBeVisible();
+});

@@ -217,6 +217,20 @@ export default function App() {
     setView('overview');
   }
 
+  /** The logo goes home: the landing page, or the summary once there's data. */
+  function goHome(e: React.MouseEvent) {
+    if (e.metaKey || e.ctrlKey || e.shiftKey) return;
+    e.preventDefault();
+    setStage('landing');
+    setPendingFiles(null);
+    setReviewFiles(null);
+    setLandingMessage(null);
+    setFlash(null);
+    setView('overview');
+    if (mode === 'demo') void store.exitDemo();
+    window.scrollTo(0, 0);
+  }
+
   async function undo(to: Workspace) {
     try {
       await store.commit(to);
@@ -233,12 +247,12 @@ export default function App() {
       </a>
       <header className="topbar">
         <div className="topbar-inner">
-          <div className="brand">
+          <a href="/" className="brand" onClick={goHome} aria-label="Check My Check home">
             <span className="brand-mark" aria-hidden="true">
               ✓
             </span>
             <span className="brand-name">Check My Check</span>
-          </div>
+          </a>
           <div className="topbar-right">
             <SaveIndicator state={store.saveState} error={store.saveError} />
             {!showWelcome && ws.plans.length > 0 && (

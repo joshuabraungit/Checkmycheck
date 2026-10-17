@@ -130,6 +130,8 @@ p {
   gap: 1rem;
 }
 .brand {
+  color: var(--text);
+  text-decoration: none;
   font-weight: 700;
   font-size: 1.1rem;
   display: flex;
