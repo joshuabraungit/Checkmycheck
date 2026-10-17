@@ -17,7 +17,7 @@ export function Welcome({ onStart, onDemo }: { onStart: () => void; onDemo: () =
       </p>
       <ol className="welcome-steps">
         <li>
-          <strong>Set up your plan.</strong> Quota, base rate, and an optional accelerator.
+          <strong>Set up your plan.</strong> Quota, base rate, and any higher tiers.
         </li>
         <li>
           <strong>Add your deals.</strong> We work out what each one should pay.

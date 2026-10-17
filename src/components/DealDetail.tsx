@@ -1,12 +1,13 @@
 import { useState } from 'react';
-import { compareExpected, sortDealsForCommission, type DealReconciliation } from '../lib/calc';
+import { compareExpected, periodLabel, sortDealsForCommission, type DealReconciliation } from '../lib/calc';
 import { formatDateLong, formatDateShort } from '../lib/dates';
-import { formatCents, formatPercent, sumCents } from '../lib/money';
+import { formatCents, formatPercent, normalizeRate, sumCents } from '../lib/money';
 import { deleteDeal, moveDealSameDay } from '../lib/ops';
 import type { Workspace } from '../lib/types';
 import { useStore } from '../state';
 import { SignedDifference, StatusBadge } from './Dashboard';
 import { DealImpact } from './DealImpact';
+import { describeTiers } from './PlansView';
 import { FormError, Modal } from './ui';
 
 type Pending = { kind: 'delete' | 'move'; next: Workspace; label: string };
@@ -107,7 +108,7 @@ export function DealDetail({ row, asOf, onClose, onEdit }: { row: DealReconcilia
       <table className="calc-table">
         <tbody>
           <tr>
-            <th scope="row">Credited revenue in {plan.year} before this deal</th>
+            <th scope="row">Credited revenue in {periodLabel(plan, row.periodIndex)} before this deal</th>
             <td className="num r">{formatCents(row.cumulativeBeforeCents)}</td>
           </tr>
           <tr>
@@ -115,36 +116,42 @@ export function DealDetail({ row, asOf, onClose, onEdit }: { row: DealReconcilia
             <td className="num r">{formatCents(row.cumulativeAfterCents)}</td>
           </tr>
           <tr>
-            <th scope="row">Annual quota</th>
-            <td className="num r">{formatCents(plan.annualQuotaCents)}</td>
+            <th scope="row">{plan.period === 'quarterly' ? `Q${row.periodIndex + 1} quota` : 'Annual quota'}</th>
+            <td className="num r">{formatCents(row.periodQuotaCents)}</td>
           </tr>
-          <tr>
-            <th scope="row">
-              Revenue at the base rate ({formatCents(row.basePortionCents)} × {formatPercent(plan.baseRate)})
-            </th>
-            <td className="num r">{formatCents(row.baseComponentRounded)}</td>
-          </tr>
-          <tr>
-            <th scope="row">
-              {plan.acceleratorRate ? (
-                <>
-                  Revenue at the accelerator rate ({formatCents(row.acceleratedPortionCents)} × {formatPercent(plan.acceleratorRate)})
-                </>
-              ) : (
-                <>Revenue at an accelerator rate (this plan has none)</>
-              )}
-            </th>
-            <td className="num r">{formatCents(row.acceleratedComponentRounded)}</td>
-          </tr>
+          {row.slices.map((sl) => (
+            <tr key={sl.tierIndex}>
+              <th scope="row">
+                {plan.tiers.length === 1 ? 'Revenue at the commission rate' : sl.tierIndex === 0 ? 'Revenue at the base rate' : `Revenue at tier ${sl.tierIndex + 1}`} (
+                {formatCents(sl.revenueCents)} × {formatPercent(normalizeRate(sl.rate))})
+              </th>
+              <td className="num r">{formatCents(sl.rounded)}</td>
+            </tr>
+          ))}
+          {row.trueUp && (
+            <tr data-testid="true-up">
+              <th scope="row">
+                Catch-up on earlier {periodLabel(plan, row.periodIndex)} revenue now at the higher rate ({formatCents(row.trueUp.priorRevenueCents)} × (
+                {formatPercent(normalizeRate(row.trueUp.toRate))} − {formatPercent(normalizeRate(row.trueUp.fromRate))}))
+              </th>
+              <td className="num r">{formatCents(row.trueUp.rounded)}</td>
+            </tr>
+          )}
           <tr className="total-row">
             <th scope="row">Expected commission</th>
             <td className="num r">{formatCents(row.expectedCents)}</td>
           </tr>
         </tbody>
       </table>
+      <p className="muted small">
+        Rates: {describeTiers(plan)}.
+        {plan.tierMode === 'retroactive' &&
+          plan.tiers.length > 1 &&
+          ` Once ${plan.period === 'quarterly' ? 'quarterly' : 'annual'} attainment reaches a tier, its rate applies to all revenue in the ${plan.period === 'quarterly' ? 'quarter' : 'year'}; earlier deals keep what they earned and the deal that crosses the line carries the catch-up.`}
+      </p>
       {!row.roundingAdjustmentCents.isZero() && (
         <p className="muted small" data-testid="rounding-note">
-          The two parts above are each shown rounded to the cent. The commission is rounded once, on the unrounded total, so it differs from
+          The parts above are each shown rounded to the cent. The commission is rounded once, on the unrounded total, so it differs from
           their sum by {formatCents(row.roundingAdjustmentCents.abs())}.
         </p>
       )}
@@ -187,7 +194,7 @@ export function DealDetail({ row, asOf, onClose, onEdit }: { row: DealReconcilia
         <div className="same-day">
           <h3>Same-day order</h3>
           <p className="muted small">
-            For deals closing on the same date, order can change which deal receives accelerator credit. This deal is{' '}
+            For deals closing on the same date, order can change which deal earns a higher tier rate. This deal is{' '}
             {sameDayIndex + 1} of {sameDay.length} on {formatDateShort(deal.closeDate)}.
           </p>
           <div className="actions-inline">

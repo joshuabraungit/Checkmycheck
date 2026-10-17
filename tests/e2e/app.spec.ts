@@ -7,10 +7,11 @@ async function createPlan(page: Page) {
   await page.getByLabel('Calendar year').fill('2026');
   await page.getByLabel('Annual quota (credited revenue, $)').fill('100000');
   await page.getByLabel('Base commission rate (%)').fill('10');
-  await page.getByLabel('Accelerator rate (%)').fill('15');
+  await page.getByLabel('Tier 2 starts at (% of quota)').fill('100');
+  await page.getByLabel('Tier 2 rate (%)').fill('15');
   // Unsupported features are listed before confirming.
-  await expect(page.getByText('Retroactive accelerators')).toBeVisible();
-  await page.getByLabel('My plan uses the credited revenue entered here and a marginal accelerator above an annual quota.').check();
+  await expect(page.getByText('Commission caps')).toBeVisible();
+  await page.getByLabel('My plan uses the credited revenue entered here, with the quota and rates above.').check();
   await page.getByRole('button', { name: 'Save plan and continue' }).click();
   await expect(page.getByRole('heading', { name: 'Deals in 2026' })).toBeVisible();
 }
@@ -250,7 +251,7 @@ test('editing the plan previews old and new totals before saving', async ({ page
   await openSettings(page, 'Commission plan');
   await page.getByRole('button', { name: 'Edit 2026 plan' }).click();
   const dlg = page.getByRole('dialog', { name: 'Edit 2026 plan' });
-  await dlg.getByLabel('Accelerator rate (%)').fill('20');
+  await dlg.getByLabel('Tier 2 rate (%)').fill('20');
   await dlg.getByRole('button', { name: 'Review changes' }).click();
   await expect(dlg).toContainText('$11,500.00');
   await expect(dlg).toContainText('$12,000.00');
@@ -258,7 +259,7 @@ test('editing the plan previews old and new totals before saving', async ({ page
   await expect(dlg).toContainText('does not model midyear plan changes');
   await dlg.getByRole('button', { name: 'Save plan changes' }).click();
   await expect(dlg).toBeHidden();
-  await expect(page.getByText('20%')).toBeVisible();
+  await expect(page.getByText('10%, 20% from 100% of quota (marginal)')).toBeVisible();
 });
 
 test('a second tab picks up changes instead of overwriting them', async ({ page, context }) => {
@@ -271,4 +272,37 @@ test('a second tab picks up changes instead of overwriting them', async ({ page,
   await addDeal(other, 'From Tab Two', '2000', '2026-01-11', '2026-02-15');
   await expect(page.getByTestId('deal-row-From Tab Two')).toBeVisible();
   await expect(page.getByTestId('deal-row-From Tab One')).toBeVisible();
+});
+
+test('quarterly retroactive plan: the crossing deal carries the catch-up and quarters reset', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Start my tracker' }).click();
+  await page.getByLabel('Calendar year').fill('2026');
+  await page.getByLabel('Each quarter (attainment starts over every quarter)').check();
+  for (const q of ['Q1', 'Q2', 'Q3', 'Q4']) await page.getByLabel(`${q} quota ($)`).fill('50000');
+  await page.getByLabel('Base commission rate (%)').fill('10');
+  await page.getByLabel('Tier 2 rate (%)').fill('15');
+  await page.getByLabel(/All revenue so far in the quarter \(retroactive\)/).check();
+  await page.getByLabel('My plan uses the credited revenue entered here, with the quota and rates above.').check();
+  await page.getByRole('button', { name: 'Save plan and continue' }).click();
+  await expect(page.getByRole('heading', { name: 'Deals in 2026' })).toBeVisible();
+
+  await addDeal(page, 'Early', '40000', '2026-01-10', '2026-02-15');
+  await addDeal(page, 'Crosser', '20000', '2026-02-10', '2026-03-15');
+  await addDeal(page, 'Next Quarter', '30000', '2026-04-10', '2026-05-15');
+
+  // 20k at 15% plus the catch-up of 40k x (15% - 10%).
+  await expect(page.getByTestId('deal-row-Crosser')).toContainText('$5,000.00');
+  // Q2 starts over at the base rate.
+  await expect(page.getByTestId('deal-row-Next Quarter')).toContainText('$3,000.00');
+
+  await page.getByRole('button', { name: 'Crosser, view calculation' }).click();
+  const detail = page.getByRole('dialog', { name: 'Crosser' });
+  await expect(detail).toContainText('Credited revenue in Q1 2026 before this deal');
+  await expect(detail.getByTestId('true-up')).toContainText('$40,000.00 × (15% − 10%)');
+  await expect(detail.getByTestId('true-up')).toContainText('$2,000.00');
+  await page.keyboard.press('Escape');
+
+  await openSettings(page, 'Commission plan');
+  await expect(page.getByText('10%, 15% from 100% of quota (retroactive)')).toBeVisible();
 });

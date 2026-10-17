@@ -7,25 +7,47 @@
 import { D, roundHalfUp, sumCents, type Dec } from './money';
 import type { Allocation, DateOnly, Deal, Payment, Plan, Workspace } from './types';
 
+/** The part of one deal's revenue that falls inside one tier's band. */
+export interface TierSlice {
+  tierIndex: number;
+  rate: Dec;
+  revenueCents: Dec;
+  /** Unrounded commission for this slice (may contain fractional cents). */
+  exact: Dec;
+  /** Rounded for display only. */
+  rounded: Dec;
+}
+
+/**
+ * Retroactive plans only: the catch-up owed on earlier revenue in the period
+ * when this deal moves attainment into a higher tier.
+ */
+export interface TrueUp {
+  priorRevenueCents: Dec;
+  fromRate: Dec;
+  toRate: Dec;
+  exact: Dec;
+  rounded: Dec;
+}
+
 export interface DealCalc {
   deal: Deal;
   plan: Plan;
   /** Position of the deal in commission order within its plan (0-based). */
   orderIndex: number;
+  /** 0 for an annual plan; 0 to 3 (Q1 to Q4) for a quarterly plan. */
+  periodIndex: number;
+  periodQuotaCents: Dec;
   revenueCents: Dec;
+  /** Credited revenue in this deal's period before and after it. */
   cumulativeBeforeCents: Dec;
   cumulativeAfterCents: Dec;
-  basePortionCents: Dec;
-  acceleratedPortionCents: Dec;
-  /** Unrounded base-rate component (may contain fractional cents). */
-  baseComponentExact: Dec;
-  acceleratedComponentExact: Dec;
-  /** Components rounded for display only. */
-  baseComponentRounded: Dec;
-  acceleratedComponentRounded: Dec;
+  /** This deal's own revenue, by tier. Only slices with revenue are listed. */
+  slices: TierSlice[];
+  trueUp: TrueUp | null;
   /** Final expected commission, rounded once per deal. */
   expectedCents: Dec;
-  /** expected - (rounded base + rounded accelerated). Usually 0, sometimes +/- 1 cent. */
+  /** expected - sum of the rounded parts. Usually 0, sometimes +/- 1 cent. */
   roundingAdjustmentCents: Dec;
 }
 
@@ -40,53 +62,78 @@ export function sortDealsForCommission(deals: readonly Deal[]): Deal[] {
   return [...deals].sort(compareDealsForCommission);
 }
 
+/** Which quota period a close date falls in: always 0 for annual plans, else the quarter (0 to 3). */
+export function periodIndexFor(plan: Plan, closeDate: DateOnly): number {
+  return plan.period === 'quarterly' ? Math.floor((Number(closeDate.slice(5, 7)) - 1) / 3) : 0;
+}
+
+export function periodLabel(plan: Plan, periodIndex: number): string {
+  return plan.period === 'quarterly' ? `Q${periodIndex + 1} ${plan.year}` : String(plan.year);
+}
+
+/** Index of the tier in effect at an attainment level (credited revenue so far). At a threshold, the higher tier applies. */
+function tierIndexAt(starts: Dec[], attained: Dec): number {
+  let idx = 0;
+  for (let i = 1; i < starts.length; i++) if (attained.gte(starts[i])) idx = i;
+  return idx;
+}
+
 /** Calculate expected commission for every deal in one plan, in commission order. */
 export function calculatePlan(plan: Plan, allDeals: readonly Deal[]): DealCalc[] {
   const deals = sortDealsForCommission(allDeals.filter((d) => d.planId === plan.id));
-  const quota = new D(plan.annualQuotaCents);
-  const base = new D(plan.baseRate);
-  const accel = plan.acceleratorRate === null ? null : new D(plan.acceleratorRate);
-  let cumulative = new D(0);
+  const rates = plan.tiers.map((t) => new D(t.rate));
+  const cumulative = plan.quotasCents.map(() => new D(0));
   return deals.map((deal, orderIndex) => {
+    const periodIndex = periodIndexFor(plan, deal.closeDate);
+    const quota = new D(plan.quotasCents[periodIndex]);
+    // Where each tier's band starts, in credited revenue for this period.
+    const starts = plan.tiers.map((t) => quota.times(t.fromAttainment));
     const revenue = new D(deal.creditedRevenueCents);
-    const before = cumulative;
+    const before = cumulative[periodIndex];
     const after = before.plus(revenue);
-    cumulative = after;
+    cumulative[periodIndex] = after;
 
-    let basePortion: Dec;
-    let acceleratedPortion: Dec;
-    let baseExact: Dec;
-    let accelExact: Dec;
-    if (accel === null) {
-      basePortion = revenue;
-      acceleratedPortion = new D(0);
-      baseExact = revenue.times(base);
-      accelExact = new D(0);
+    const slices: TierSlice[] = [];
+    let trueUp: TrueUp | null = null;
+    if (plan.tierMode === 'marginal') {
+      for (let i = 0; i < starts.length; i++) {
+        const lo = D.max(before, starts[i]);
+        const hi = i + 1 < starts.length ? D.min(after, starts[i + 1]) : after;
+        const part = hi.minus(lo);
+        if (part.lte(0)) continue;
+        const exact = part.times(rates[i]);
+        slices.push({ tierIndex: i, rate: rates[i], revenueCents: part, exact, rounded: roundHalfUp(exact) });
+      }
     } else {
-      const roomUnderQuota = D.max(quota.minus(before), 0);
-      basePortion = D.min(revenue, roomUnderQuota);
-      acceleratedPortion = revenue.minus(basePortion);
-      baseExact = basePortion.times(base);
-      accelExact = acceleratedPortion.times(accel);
+      const fromIdx = tierIndexAt(starts, before);
+      const toIdx = tierIndexAt(starts, after);
+      const exact = revenue.times(rates[toIdx]);
+      slices.push({ tierIndex: toIdx, rate: rates[toIdx], revenueCents: revenue, exact, rounded: roundHalfUp(exact) });
+      if (toIdx !== fromIdx && before.gt(0)) {
+        const lift = rates[toIdx].minus(rates[fromIdx]);
+        const upExact = before.times(lift);
+        trueUp = { priorRevenueCents: before, fromRate: rates[fromIdx], toRate: rates[toIdx], exact: upExact, rounded: roundHalfUp(upExact) };
+      }
     }
-    const expected = roundHalfUp(baseExact.plus(accelExact));
-    const baseRounded = roundHalfUp(baseExact);
-    const accelRounded = roundHalfUp(accelExact);
+    if (slices.length === 0) {
+      slices.push({ tierIndex: 0, rate: rates[0], revenueCents: new D(0), exact: new D(0), rounded: new D(0) });
+    }
+    const exactTotal = sumCents(slices.map((x) => x.exact)).plus(trueUp?.exact ?? 0);
+    const expected = roundHalfUp(exactTotal);
+    const roundedParts = sumCents(slices.map((x) => x.rounded)).plus(trueUp?.rounded ?? 0);
     return {
       deal,
       plan,
       orderIndex,
+      periodIndex,
+      periodQuotaCents: quota,
       revenueCents: revenue,
       cumulativeBeforeCents: before,
       cumulativeAfterCents: after,
-      basePortionCents: basePortion,
-      acceleratedPortionCents: acceleratedPortion,
-      baseComponentExact: baseExact,
-      acceleratedComponentExact: accelExact,
-      baseComponentRounded: baseRounded,
-      acceleratedComponentRounded: accelRounded,
+      slices,
+      trueUp,
       expectedCents: expected,
-      roundingAdjustmentCents: expected.minus(baseRounded).minus(accelRounded),
+      roundingAdjustmentCents: expected.minus(roundedParts),
     };
   });
 }

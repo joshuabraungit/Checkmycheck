@@ -6,9 +6,13 @@ export function plan(overrides: Partial<Plan> = {}): Plan {
     id: newId(),
     year: 2026,
     currency: 'USD',
-    annualQuotaCents: '10000000', // $100,000
-    baseRate: '0.10',
-    acceleratorRate: '0.15',
+    period: 'annual',
+    quotasCents: ['10000000'], // $100,000
+    tiers: [
+      { fromAttainment: '0.0', rate: '0.10' },
+      { fromAttainment: '1.0', rate: '0.15' },
+    ],
+    tierMode: 'marginal',
     notes: '',
     ...overrides,
   };
@@ -37,4 +41,9 @@ export function payment(date: string, cents: string, overrides: Partial<Payment>
 
 export function ws(parts: Partial<Workspace>): Workspace {
   return { schemaVersion: SCHEMA_VERSION, plans: [], deals: [], payments: [], allocations: [], ...parts };
+}
+
+/** Annual marginal plan with a single rate and no accelerator. */
+export function flatPlan(rate: string, overrides: Partial<Plan> = {}): Plan {
+  return plan({ tiers: [{ fromAttainment: '0.0', rate }], ...overrides });
 }

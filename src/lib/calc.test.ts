@@ -1,18 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { calculatePlan, compareExpected, reconcile, suggestAllocations } from './calc';
+import { calculatePlan, compareExpected, reconcile, suggestAllocations, type DealCalc } from './calc';
 import { D } from './money';
 import { demoWorkspace, DEMO_AS_OF } from './demo';
 import { deleteDeal, moveDealSameDay, OpError, saveDeal, setPaymentAllocations, savePayment } from './ops';
-import { deal, payment, plan, ws } from './testHelpers';
+import { deal, flatPlan, payment, plan, ws } from './testHelpers';
 
 const s = (d: { toFixed: (n: number) => string }) => d.toFixed(0);
+/** Revenue and rounded commission in one tier for a deal (zero when the deal has none there). */
+const part = (c: DealCalc, tier: number) => c.slices.find((x) => x.tierIndex === tier)?.revenueCents ?? new D(0);
+const comp = (c: DealCalc, tier: number) => c.slices.find((x) => x.tierIndex === tier)?.rounded ?? new D(0);
 
 describe('expected commission', () => {
   it('1. below quota earns only the base rate', () => {
     const p = plan();
     const [c] = calculatePlan(p, [deal(p, 40000, '2026-02-01')]);
-    expect(s(c.basePortionCents)).toBe('4000000');
-    expect(s(c.acceleratedPortionCents)).toBe('0');
+    expect(s(part(c, 0))).toBe('4000000');
+    expect(s(part(c, 1))).toBe('0');
     expect(s(c.expectedCents)).toBe('400000'); // $4,000
   });
 
@@ -23,33 +26,33 @@ describe('expected commission', () => {
     const [, c] = calculatePlan(p, [first, crossing]);
     expect(s(c.cumulativeBeforeCents)).toBe('6000000');
     expect(s(c.cumulativeAfterCents)).toBe('11000000');
-    expect(s(c.basePortionCents)).toBe('4000000');
-    expect(s(c.acceleratedPortionCents)).toBe('1000000');
-    expect(s(c.baseComponentRounded)).toBe('400000');
-    expect(s(c.acceleratedComponentRounded)).toBe('150000');
+    expect(s(part(c, 0))).toBe('4000000');
+    expect(s(part(c, 1))).toBe('1000000');
+    expect(s(comp(c, 0))).toBe('400000');
+    expect(s(comp(c, 1))).toBe('150000');
     expect(s(c.expectedCents)).toBe('550000'); // $5,500
   });
 
   it('3. a deal entirely above quota earns only the accelerator', () => {
     const p = plan();
     const [, c] = calculatePlan(p, [deal(p, 120000, '2026-01-10'), deal(p, 10000, '2026-02-10')]);
-    expect(s(c.basePortionCents)).toBe('0');
+    expect(s(part(c, 0))).toBe('0');
     expect(s(c.expectedCents)).toBe('150000');
   });
 
   it('4. hitting quota exactly keeps the deal at base; the next dollar accelerates', () => {
     const p = plan();
     const [a, b] = calculatePlan(p, [deal(p, 100000, '2026-01-10'), deal(p, 1, '2026-01-11')]);
-    expect(s(a.acceleratedPortionCents)).toBe('0');
+    expect(s(part(a, 1))).toBe('0');
     expect(s(a.expectedCents)).toBe('1000000');
-    expect(s(b.basePortionCents)).toBe('0');
+    expect(s(part(b, 0))).toBe('0');
     expect(s(b.expectedCents)).toBe('15'); // $1 at 15%
   });
 
   it('5. with the accelerator disabled every dollar earns base', () => {
-    const p = plan({ acceleratorRate: null });
+    const p = flatPlan('0.10');
     const [, c] = calculatePlan(p, [deal(p, 90000, '2026-01-10'), deal(p, 50000, '2026-02-10')]);
-    expect(s(c.acceleratedPortionCents)).toBe('0');
+    expect(s(part(c, 1))).toBe('0');
     expect(s(c.expectedCents)).toBe('500000');
   });
 
@@ -84,7 +87,7 @@ describe('expected commission', () => {
     expect(s(calculatePlan(p, before.deals)[1].expectedCents)).toBe('650000'); // 50k*10% + 10k*15%
     const { workspace: after } = saveDeal(before, { ...early, creditedRevenueCents: '7000000' });
     const lateCalc = calculatePlan(p, after.deals)[1];
-    expect(s(lateCalc.basePortionCents)).toBe('3000000');
+    expect(s(part(lateCalc, 0))).toBe('3000000');
     expect(s(lateCalc.expectedCents)).toBe('750000'); // 30k*10% + 30k*15%
     const impact = compareExpected(before, after, [p.id], [early.id]);
     expect(impact.otherChangedDealIds).toEqual([late.id]);
@@ -93,29 +96,29 @@ describe('expected commission', () => {
   });
 
   it('8. rounds fractional cents half up once per deal and reports any display adjustment', () => {
-    const p = plan({ annualQuotaCents: '10', baseRate: '0.125', acceleratorRate: '0.135' });
+    const p = plan({ quotasCents: ['10'], tiers: [{ fromAttainment: '0.0', rate: '0.125' }, { fromAttainment: '1.0', rate: '0.135' }] });
     // R = $0.13 -> 13 cents, C = 0. base portion 10c*0.125 = 1.25c, accel 3c*0.135 = 0.405c => 1.655 -> 2
     const [c] = calculatePlan(p, [deal(p, '0.13', '2026-01-01')]);
     expect(c.expectedCents.toFixed(0)).toBe('2');
-    expect(c.baseComponentRounded.toFixed(0)).toBe('1');
-    expect(c.acceleratedComponentRounded.toFixed(0)).toBe('0');
+    expect(comp(c, 0).toFixed(0)).toBe('1');
+    expect(comp(c, 1).toFixed(0)).toBe('0');
     expect(c.roundingAdjustmentCents.toFixed(0)).toBe('1');
 
     // Exactly half a cent rounds up.
-    const p2 = plan({ baseRate: '0.05', acceleratorRate: null });
+    const p2 = flatPlan('0.05');
     const [half] = calculatePlan(p2, [deal(p2, '0.01', '2026-01-01')]); // 1c * 5% = 0.05c
     expect(half.expectedCents.toFixed(0)).toBe('0');
     const [half2] = calculatePlan(p2, [deal(p2, '0.10', '2026-01-01')]); // 10c * 5% = 0.5c -> 1
     expect(half2.expectedCents.toFixed(0)).toBe('1');
 
     // No float drift: 0.1 + 0.2 style values.
-    const p3 = plan({ baseRate: '0.07', acceleratorRate: null });
+    const p3 = flatPlan('0.07');
     const [f] = calculatePlan(p3, [deal(p3, '1234567.89', '2026-01-01')]);
     expect(f.expectedCents.toFixed(0)).toBe('8641975'); // 123456789 * 0.07 = 8641975.23
   });
 
   it('keeps arbitrary precision for very large totals', () => {
-    const p = plan({ annualQuotaCents: '99999999999', baseRate: '1', acceleratorRate: null });
+    const p = flatPlan('1', { quotasCents: ['99999999999'] });
     const deals = Array.from({ length: 200 }, (_, i) => deal(p, '999999999.99', `2026-01-${String((i % 28) + 1).padStart(2, '0')}`));
     const total = calculatePlan(p, deals).reduce((acc, c) => acc + BigInt(c.expectedCents.toFixed(0)), 0n);
     expect(total.toString()).toBe((99999999999n * 200n).toString());
@@ -349,5 +352,82 @@ describe('suggested allocations', () => {
     const out = suggestAllocations(w, '2026-03-15', new D('500000'), mar.id);
     expect(s(out.get(acme.id)!)).toBe('200000');
     expect(s(out.get(beacon.id)!)).toBe('300000');
+  });
+});
+
+describe('tiered plans', () => {
+  const tiers3 = [
+    { fromAttainment: '0.0', rate: '0.10' },
+    { fromAttainment: '1.0', rate: '0.15' },
+    { fromAttainment: '1.5', rate: '0.20' },
+  ];
+
+  it('marginal: one deal can span several tiers', () => {
+    const p = plan({ tiers: tiers3 });
+    const [, c] = calculatePlan(p, [deal(p, 60000, '2026-01-10'), deal(p, 120000, '2026-02-10')]);
+    expect(c.slices.map((x) => [x.tierIndex, s(x.revenueCents), s(x.rounded)])).toEqual([
+      [0, '4000000', '400000'],
+      [1, '5000000', '750000'],
+      [2, '3000000', '600000'],
+    ]);
+    expect(s(c.expectedCents)).toBe('1750000'); // $17,500
+    expect(c.trueUp).toBeNull();
+  });
+
+  it('retroactive: the crossing deal carries the catch-up on earlier revenue', () => {
+    const p = plan({ tierMode: 'retroactive' });
+    const [a, b, c] = calculatePlan(p, [deal(p, 60000, '2026-01-10'), deal(p, 50000, '2026-02-10'), deal(p, 20000, '2026-03-10')]);
+    expect(s(a.expectedCents)).toBe('600000'); // 60k at 10%
+    expect(s(b.slices[0].exact)).toBe('750000'); // own 50k at 15%
+    expect(s(b.trueUp!.priorRevenueCents)).toBe('6000000');
+    expect(s(b.trueUp!.exact)).toBe('300000'); // 60k x (15% - 10%)
+    expect(s(b.expectedCents)).toBe('1050000');
+    expect(c.trueUp).toBeNull();
+    expect(s(c.expectedCents)).toBe('300000');
+    // The year pays out exactly 130k at 15%.
+    expect(s(a.expectedCents.plus(b.expectedCents).plus(c.expectedCents))).toBe('1950000');
+  });
+
+  it('retroactive: jumping two tiers trues up from the old rate to the new one', () => {
+    const p = plan({ tiers: tiers3, tierMode: 'retroactive' });
+    const [, b] = calculatePlan(p, [deal(p, 60000, '2026-01-10'), deal(p, 100000, '2026-02-10')]);
+    expect(s(b.slices[0].exact)).toBe('2000000'); // 100k at 20%
+    expect(s(b.trueUp!.exact)).toBe('600000'); // 60k x (20% - 10%)
+    expect(s(b.expectedCents)).toBe('2600000');
+  });
+
+  it('retroactive: reaching a threshold exactly moves into the higher tier, with no catch-up for a first deal', () => {
+    const p = plan({ tierMode: 'retroactive' });
+    const [a] = calculatePlan(p, [deal(p, 100000, '2026-01-10')]);
+    expect(s(a.expectedCents)).toBe('1500000');
+    expect(a.trueUp).toBeNull();
+  });
+
+  it('quarterly: attainment resets each quarter against that quarter’s quota', () => {
+    const p = plan({
+      period: 'quarterly',
+      quotasCents: ['5000000', '5000000', '6000000', '6000000'],
+      tiers: [
+        { fromAttainment: '0.0', rate: '0.10' },
+        { fromAttainment: '1.0', rate: '0.20' },
+      ],
+    });
+    const [q1, q2a, q2b] = calculatePlan(p, [
+      deal(p, 70000, '2026-02-10'),
+      deal(p, 30000, '2026-04-10'),
+      deal(p, 30000, '2026-05-10'),
+    ]);
+    expect([q1.periodIndex, q2a.periodIndex, q2b.periodIndex]).toEqual([0, 1, 1]);
+    expect(s(q1.expectedCents)).toBe('900000'); // 50k at 10% + 20k at 20%
+    expect(s(q2a.cumulativeBeforeCents)).toBe('0');
+    expect(s(q2a.expectedCents)).toBe('300000');
+    expect(s(q2b.expectedCents)).toBe('400000'); // 20k at 10% + 10k at 20%
+  });
+
+  it('quarterly retroactive: the catch-up only covers the same quarter', () => {
+    const p = plan({ period: 'quarterly', quotasCents: ['5000000', '5000000', '5000000', '5000000'], tierMode: 'retroactive' });
+    const [, , c] = calculatePlan(p, [deal(p, 40000, '2026-01-10'), deal(p, 30000, '2026-04-10'), deal(p, 30000, '2026-05-10')]);
+    expect(s(c.trueUp!.priorRevenueCents)).toBe('3000000'); // only Q2's earlier deal
+    expect(s(c.expectedCents)).toBe('600000'); // 30k at 15% + 30k x 5%
   });
 });
