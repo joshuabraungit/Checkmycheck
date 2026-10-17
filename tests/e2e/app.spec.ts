@@ -359,3 +359,59 @@ test('imports deals and a payment statement from Excel files', async ({ page }) 
   await expect(page.getByText('Imported 2 payments.')).toBeVisible();
   await expect(page.getByTestId('payment-card')).toHaveCount(2);
 });
+
+test('picks the right tab of a multi-tab workbook and lets you switch', async ({ page }) => {
+  const { default: writeExcelFile } = await import('write-excel-file/node');
+  const date = (y: number, m: number, d: number) => ({ value: new Date(Date.UTC(y, m - 1, d)), type: Date, format: 'mm/dd/yyyy' });
+  const workbook = await writeExcelFile([
+    {
+      sheet: 'Read Me',
+      data: [[{ value: 'How to use this tracker' }], [{ value: 'Blue text = inputs' }]],
+    },
+    {
+      sheet: 'Deals',
+      data: [
+        [{ value: '2026 Commission Tracker' }],
+        [],
+        [{ value: 'Opportunity ID' }, { value: 'Account Name' }, { value: 'Close Date' }, { value: 'ARR' }, { value: 'Est. Commission' }, { value: 'Expected Payout Date' }],
+        [{ value: 'OPP-1' }, { value: 'Acme' }, date(2026, 1, 22), { value: 60000, type: Number }, { value: 6000, type: Number }, date(2026, 2, 15)],
+        [{ value: 'OPP-2' }, { value: 'Beacon' }, date(2026, 2, 11), { value: 50000, type: Number }, { value: 5000, type: Number }, date(2026, 3, 15)],
+      ],
+    },
+    {
+      sheet: 'Paystub Log',
+      data: [
+        [{ value: 'Pay Date' }, { value: 'Pay Period' }, { value: 'Gross Commission' }, { value: 'Net Pay (after tax)' }],
+        [date(2026, 2, 13), { value: 'Jan commissions' }, { value: 6000, type: Number }, { value: 4140, type: Number }],
+        [date(2026, 3, 13), { value: 'Feb commissions' }, { value: 5500, type: Number }, { value: 3795, type: Number }],
+      ],
+    },
+  ]).toBuffer();
+  const file = { name: 'tracker.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: workbook };
+
+  await createPlan(page);
+  await setAsOf(page, '2026-06-30');
+  await page.getByTestId('import-deals').setInputFiles(file);
+  const dlg = page.getByRole('dialog', { name: 'Import deals from a spreadsheet' });
+  const tabSelect = dlg.getByLabel('Which tab has your deals?');
+  await expect(tabSelect.locator('option:checked')).toHaveText('Deals');
+  // The Read Me tab has no header row, so it isn't offered.
+  await expect(tabSelect.locator('option')).toHaveText(['Deals', 'Paystub Log']);
+  await expect(dlg.getByTestId('import-summary')).toContainText('2 deals ready');
+  // Switching tabs re-matches columns for that tab.
+  await tabSelect.selectOption({ label: 'Paystub Log' });
+  await expect(dlg.getByTestId('import-summary')).toContainText('Choose a column for: Account name');
+  await tabSelect.selectOption({ label: 'Deals' });
+  await dlg.getByRole('button', { name: 'Import 2 deals' }).click();
+  await expect(page.getByTestId('deal-row-Beacon')).toBeVisible();
+
+  // Same file on the Payments tab lands on the paystub log.
+  await page.getByRole('button', { name: 'Payments', exact: true }).click();
+  await page.getByTestId('import-payments').setInputFiles(file);
+  const pdlg = page.getByRole('dialog', { name: 'Import payments from a spreadsheet' });
+  await expect(pdlg.getByLabel('Which tab has your payments?').locator('option:checked')).toHaveText('Paystub Log');
+  await expect(pdlg.getByTestId('import-summary')).toContainText('2 payments ready');
+  await expect(pdlg).toContainText('Total: $11,500.00');
+  await pdlg.getByRole('button', { name: 'Import 2 payments' }).click();
+  await expect(page.getByTestId('payment-card')).toHaveCount(2);
+});

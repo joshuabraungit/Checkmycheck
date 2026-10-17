@@ -222,6 +222,37 @@ export function guessMapping(kind: ImportKind, headers: readonly string[]): Mapp
   return mapping;
 }
 
+/** One tab of a workbook (a CSV is a single tab). */
+export interface Tab {
+  name: string;
+  rows: string[][];
+}
+
+/**
+ * Pick the tab that looks most like the data being imported: required
+ * fields count most, and exact column names beat partial matches.
+ */
+export function pickTab(kind: ImportKind, tabs: readonly Tab[]): number {
+  let best = 0;
+  let bestScore = -1;
+  tabs.forEach((tab, i) => {
+    const sheet = buildSheet(tab.rows);
+    if ('error' in sheet) return;
+    const mapping = guessMapping(kind, sheet.headers);
+    let score = 0;
+    for (const f of fieldsFor(kind)) {
+      const col = mapping[f.key];
+      if (col === null || col === undefined) continue;
+      score += scoreHeader(f, sheet.headers[col]) * (f.required ? 10 : 1);
+    }
+    if (score > bestScore) {
+      best = i;
+      bestScore = score;
+    }
+  });
+  return best;
+}
+
 /** Signature of a file's columns, used to remember the user's mapping for next time. */
 export function headerSignature(kind: ImportKind, headers: readonly string[]): string {
   return `${kind}:${headers.map(normalizeHeader).join('|')}`;

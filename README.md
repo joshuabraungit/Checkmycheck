@@ -82,6 +82,7 @@ Files in this exact format import with their IDs and same-day order kept. Import
 
 **Import from spreadsheet** (Overview), **Import statement** (Payments), and the import buttons on **Backup & files** accept any CSV or Excel `.xlsx` file, such as a CRM opportunity export, a commission statement, or a personal tracker. Everything happens in the browser.
 
+- **Workbooks with several tabs:** the tab that looks most like deals (or payments) is picked automatically, and you can switch tabs. Tabs with no header row, like a Read Me, aren't offered. One tracker file can feed both the deals import and the payments import.
 - **Header detection:** title rows above the column names are skipped. Totals rows (starting with "Total") are skipped and listed.
 - **Column matching:** columns are matched to fields automatically (for example `Account Name`, `ACV`, `Closed Won Date`, `Opportunity ID`, or `Pay Date`, `Gross Commission`). You confirm or change each match. A column with "commission" in its name is never used as deal revenue, and "net pay" is never used as gross commission.
 - **Tolerant values:** money like `$60,000.00` or `USD 1,250.5`, and dates like `2026-01-10`, `1/30/26`, `Jan 10, 2026`, or `10-Jan-2026`. Excel date and number cells are read exactly, without time zone shifts or floating-point rounding.
@@ -91,7 +92,7 @@ Files in this exact format import with their IDs and same-day order kept. Import
 - **Years without a plan:** rows from those years either block the import or, if you choose, are skipped.
 - **Remembered choices:** your column matches and options are saved in this browser for each file layout, so the next import of the same layout is one click.
 - **All or nothing:** any row with a problem blocks the whole import, with row numbers matching the spreadsheet. Imported payments start unallocated.
-- **Not supported:** legacy `.xls` files (save as `.xlsx` or CSV), multi-sheet workbooks (the first sheet is read), and European number formats like `1.234,56`.
+- **Not supported:** legacy `.xls` files (save as `.xlsx` or CSV), and European number formats like `1.234,56`.
 
 ## Example workspace
 

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { parseCsv } from './csv';
 import { cellToText } from './readSpreadsheet';
 import {
-  buildDeals, buildPayments, buildSheet, DEFAULT_OPTIONS, detectDateOrder, guessMapping, headerSignature, parseFlexibleDate,
+  buildDeals, buildPayments, buildSheet, DEFAULT_OPTIONS, detectDateOrder, guessMapping, headerSignature, parseFlexibleDate, pickTab,
   parseFlexibleMoney, type Sheet,
 } from './sheetImport';
 import { plan, ws } from './testHelpers';
@@ -232,5 +232,23 @@ describe('cellToText', () => {
     expect(cellToText(new Date(Date.UTC(2026, 11, 31, 23, 59)))).toBe('2026-12-31');
     expect(cellToText('60000.1')).toBe('60000.1');
     expect(cellToText(null)).toBe('');
+  });
+});
+
+describe('pickTab', () => {
+  const deals = { name: 'Deals', rows: parseCsv('2026 tracker,,,,\n,,,,\nAccount Name,Close Date,ARR,Est. Commission,Expected Payout Date,Notes\nA,2026-01-10,100,10,2026-02-15,\n') };
+  const paystubs = { name: 'Paystub Log', rows: parseCsv('Commission lines,,,\n,,,\nPay Date,Pay Period,Gross Commission,Net Pay (after tax)\n2026-02-13,Jan,100,70\n') };
+  const totals = { name: 'Monthly Totals', rows: parseCsv('Month,Closed ARR,Attainment\nJan 2026,100,1%\n') };
+  const readme = { name: 'Read Me', rows: parseCsv('How to use this tracker\nBlue text = inputs\n') };
+
+  it('finds the deals tab and the payments tab in one workbook', () => {
+    const tabs = [deals, paystubs, totals, readme];
+    expect(tabs[pickTab('deals', tabs)].name).toBe('Deals');
+    expect(tabs[pickTab('payments', tabs)].name).toBe('Paystub Log');
+  });
+
+  it('falls back to the first readable tab when nothing matches', () => {
+    expect(pickTab('payments', [totals, readme])).toBe(0);
+    expect(pickTab('payments', [readme, totals])).toBe(1);
   });
 });
