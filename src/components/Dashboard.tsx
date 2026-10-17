@@ -9,7 +9,7 @@ import { DealDetail } from './DealDetail';
 import { DealForm } from './DealForm';
 import { InquiryDialog } from './InquiryDialog';
 import { downloadText } from './ui';
-import { SpreadsheetImportButton } from './SpreadsheetImport';
+import { DropZone } from './DropZone';
 import { AutoMatchButton } from './AutoMatch';
 
 type SortKey = 'commission' | 'account' | 'expectedDate' | 'expected' | 'received' | 'difference' | 'status';
@@ -110,6 +110,8 @@ export function Dashboard({ year, years, onYear, asOf, onAsOf, onGoToPayments }:
   useEffect(() => setAsOfDraft(asOf), [asOf]);
 
   const rec = useMemo(() => reconcile(ws, year, asOf), [ws, year, asOf]);
+  const empty = !ws.deals.length && !ws.payments.length;
+  const [dropMessage, setDropMessage] = useState<string | null>(null);
   const { summary } = rec;
   const plan = rec.plan!;
 
@@ -163,15 +165,37 @@ export function Dashboard({ year, years, onYear, asOf, onAsOf, onGoToPayments }:
         Overview
       </h1>
 
+      {empty ? (
+        <div className="start panel">
+          <h2>Add your deals and paystubs</h2>
+          <p className="muted">
+            That’s all it takes to check your commission. We’ll work out what each file is, match payments to deals, and show you what’s
+            missing.
+          </p>
+          <DropZone onAdded={setDropMessage} />
+          <p className="muted small">
+            Prefer typing?{' '}
+            <button type="button" className="link-btn" onClick={() => setForm({})}>
+              Add a deal by hand
+            </button>
+          </p>
+        </div>
+      ) : (
+        <>
+      {dropMessage && (
+        <p className="success drop-message" role="status">
+          {dropMessage}
+        </p>
+      )}
       {summary.provisional && (
         <div className="notice notice-amber" role="status">
           <p>
-            <strong>Match your payments to deals to finish the comparison.</strong> {formatCents(summary.unallocatedCents)} received by{' '}
-            {asOfLabel} isn’t matched to deals yet, so the numbers below are provisional.
+            <strong>Some payments need a quick look.</strong> {formatCents(summary.unallocatedCents)} isn’t matched to deals yet, so the
+            numbers below are provisional.
           </p>
           <div className="actions-inline">
-            <AutoMatchButton />
-            <button type="button" className="btn btn-small" onClick={onGoToPayments}>
+            <AutoMatchButton label="Review matches" />
+            <button type="button" className="link-btn" onClick={onGoToPayments}>
               Match by hand
             </button>
           </div>
@@ -261,12 +285,14 @@ export function Dashboard({ year, years, onYear, asOf, onAsOf, onGoToPayments }:
             </ul>
             <div className="actions">
               <button type="button" className="btn" onClick={() => setInquiryOpen(true)}>
-                Draft a payroll question
+                Ask payroll about this
               </button>
             </div>
           </div>
         )}
       </div>
+
+      <DropZone compact onAdded={setDropMessage} />
 
       <details className="more-numbers">
         <summary>Show all the numbers</summary>
@@ -311,7 +337,6 @@ export function Dashboard({ year, years, onYear, asOf, onAsOf, onGoToPayments }:
           <button type="button" className="btn btn-primary" onClick={() => setForm({})}>
             Add deal
           </button>
-          <SpreadsheetImportButton kind="deals" label="Import from spreadsheet" />
           <button
             type="button"
             className="btn"
@@ -325,7 +350,7 @@ export function Dashboard({ year, years, onYear, asOf, onAsOf, onGoToPayments }:
 
       {rec.rows.length === 0 ? (
         <div className="empty panel">
-          <p>No deals in {year} yet. Add your first deal to see its expected commission, or import a CSV or Excel export from your CRM.</p>
+          <p>No deals in {year} yet. Drop a deals file above, or add one by hand.</p>
         </div>
       ) : (
         <>
@@ -404,6 +429,8 @@ export function Dashboard({ year, years, onYear, asOf, onAsOf, onGoToPayments }:
           <p className="muted small">
             Difference is expected commission minus what’s been received. Select an account to see its revenue, close date, and the math.
           </p>
+        </>
+      )}
         </>
       )}
 

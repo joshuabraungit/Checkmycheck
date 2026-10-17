@@ -12,11 +12,12 @@ async function createPlan(page: Page) {
   await expect(page.getByText('Retroactive accelerators')).toBeVisible();
   await page.getByLabel('My plan uses the credited revenue entered here and a marginal accelerator above an annual quota.').check();
   await page.getByRole('button', { name: 'Save plan and continue' }).click();
-  await expect(page.getByRole('heading', { name: 'Deals in 2026' })).toBeVisible();
+  // A new tracker opens on the start screen with the drop zone.
+  await expect(page.getByRole('heading', { name: 'Add your deals and paystubs' })).toBeVisible();
 }
 
 async function addDeal(page: Page, account: string, revenue: string, close: string, expected: string) {
-  await page.getByRole('button', { name: 'Add deal' }).click();
+  await page.getByRole('button', { name: /^Add (deal|a deal by hand)$/ }).click();
   const dialog = page.getByRole('dialog', { name: 'Add a deal' });
   await dialog.getByLabel('Account name').fill(account);
   await dialog.getByLabel('Credited revenue ($)').fill(revenue);
@@ -25,16 +26,44 @@ async function addDeal(page: Page, account: string, revenue: string, close: stri
   await dialog.getByRole('button', { name: 'Add deal' }).click();
   await expect(dialog).toBeHidden();
   await expect(page.getByTestId(`deal-row-${account}`)).toBeVisible();
+  await applyPendingAsOf(page);
+}
+
+/** Dates set while on the start screen are applied once there's data to show. */
+const pendingAsOf = new WeakMap<Page, string>();
+
+async function applyPendingAsOf(page: Page) {
+  const date = pendingAsOf.get(page);
+  if (!date || !(await page.getByRole('heading', { name: 'Add your deals and paystubs' }).isHidden())) return;
+  if (!(await page.getByText(/^As of /).first().isVisible())) return;
+  pendingAsOf.delete(page);
+  await setAsOf(page, date);
 }
 
 async function setAsOf(page: Page, date: string) {
+  // The start screen (no deals or payments yet) has no date to set yet.
+  if (await page.getByRole('heading', { name: 'Add your deals and paystubs' }).isVisible()) {
+    pendingAsOf.set(page, date);
+    return;
+  }
   const input = page.getByLabel('As of');
   if (!(await input.isVisible())) await page.getByRole('button', { name: 'Change date' }).click();
   await input.fill(date);
 }
 
-async function openSettings(page: Page, item: 'Commission plan' | 'Backup & files') {
-  await page.getByRole('button', { name: 'Settings' }).click();
+async function backToSummary(page: Page) {
+  await page.getByRole('button', { name: '← Back to summary' }).click();
+  await applyPendingAsOf(page);
+}
+
+/** The step-by-step deals import lives under Details › Backup & files. */
+async function dealsImport(page: Page) {
+  await openSettings(page, 'Backup & files');
+  return page.getByTestId('import-deals');
+}
+
+async function openSettings(page: Page, item: 'Payments' | 'Commission plan' | 'Backup & files') {
+  await page.getByRole('button', { name: 'Details' }).click();
   await page.locator('#settings-menu').getByRole('button', { name: item }).click();
 }
 
@@ -49,7 +78,7 @@ test('full workflow: plan, deals, partial payment, allocation, persistence, inqu
   await expect(page.getByTestId('deal-row-Later Co')).toContainText('Upcoming');
 
   // Record a partial payment; the split across two deals is suggested in the same form.
-  await page.getByRole('button', { name: 'Payments', exact: true }).click();
+  await openSettings(page, 'Payments');
   await page.getByRole('button', { name: 'Record payment' }).click();
   const payDialog = page.getByRole('dialog', { name: 'Record a payment' });
   await payDialog.getByLabel('Payment date').fill('2026-03-15');
@@ -70,7 +99,7 @@ test('full workflow: plan, deals, partial payment, allocation, persistence, inqu
   await expect(page.getByText('Fully allocated')).toBeVisible();
 
   // Inspect the discrepancy.
-  await page.getByRole('button', { name: 'Overview' }).click();
+  await backToSummary(page);
   await setAsOf(page, '2026-06-30');
   await expect(page.getByTestId('expected-due')).toHaveText('$11,500.00');
   await expect(page.getByTestId('received-due')).toHaveText('$9,000.00');
@@ -92,7 +121,7 @@ test('full workflow: plan, deals, partial payment, allocation, persistence, inqu
   await expect(page.getByTestId('difference')).toHaveText('$2,500.00');
 
   // Copy a payroll inquiry.
-  await page.getByRole('button', { name: 'Draft a payroll question' }).click();
+  await page.getByRole('button', { name: 'Ask payroll about this' }).click();
   const inquiry = page.getByRole('dialog', { name: 'Draft a payroll question' });
   await inquiry.getByLabel('Who it’s for').fill('Sam');
   await inquiry.getByLabel('Your name').fill('Jordan');
@@ -113,7 +142,7 @@ test('full workflow: plan, deals, partial payment, allocation, persistence, inqu
   await download.saveAs(backupPath);
 
   // Change data: delete a deal (its allocation returns to the payment as unallocated).
-  await page.getByRole('button', { name: 'Overview' }).click();
+  await backToSummary(page);
   await page.getByRole('button', { name: 'Acme, view calculation' }).click();
   await page.getByRole('dialog', { name: 'Acme' }).getByRole('button', { name: 'Delete deal' }).click();
   const confirmDelete = page.getByRole('dialog', { name: 'Delete Acme?' });
@@ -121,8 +150,8 @@ test('full workflow: plan, deals, partial payment, allocation, persistence, inqu
   await expect(confirmDelete.getByTestId('deal-impact')).toContainText('2 other deals');
   await confirmDelete.getByRole('button', { name: 'Delete deal' }).click();
   await expect(page.getByTestId('deal-row-Acme')).toHaveCount(0);
-  await expect(page.getByText('Match your payments to deals to finish the comparison.')).toBeVisible();
-  await page.getByRole('button', { name: 'Payments', exact: true }).click();
+  await expect(page.getByText('Some payments need a quick look.')).toBeVisible();
+  await openSettings(page, 'Payments');
   await expect(page.getByText('$6,000.00 unallocated')).toBeVisible();
 
   // Restore the backup.
@@ -134,7 +163,7 @@ test('full workflow: plan, deals, partial payment, allocation, persistence, inqu
   await restore.getByLabel('Replace my current data with this backup').check();
   await restore.getByRole('button', { name: 'Restore backup' }).click();
   await expect(restore).toBeHidden();
-  await page.getByRole('button', { name: 'Overview' }).click();
+  await backToSummary(page);
   await setAsOf(page, '2026-06-30');
   await expect(page.getByTestId('deal-row-Acme')).toBeVisible();
   await expect(page.getByTestId('received-due')).toHaveText('$9,000.00');
@@ -198,7 +227,7 @@ test('CSV import previews, rejects invalid files atomically, and imports valid o
   await expect(pdlg).toContainText('Imported payments start unallocated');
   await pdlg.getByRole('button', { name: 'Import 1 payments' }).click();
 
-  await page.getByRole('button', { name: 'Overview' }).click();
+  await backToSummary(page);
   await expect(page.getByTestId('deal-row-Acme, Inc.')).toBeVisible();
   await expect(page.getByTestId('deal-row-Acme')).toBeVisible();
 });
@@ -230,13 +259,13 @@ for (const viewport of [
     await page.getByRole('button', { name: 'Beacon, view calculation' }).click();
     await noScroll();
     await page.keyboard.press('Escape');
-    await page.getByRole('button', { name: 'Payments', exact: true }).click();
+    await openSettings(page, 'Payments');
     await noScroll();
     for (const item of ['Commission plan', 'Backup & files'] as const) {
       await openSettings(page, item);
       await noScroll();
     }
-    await page.getByRole('button', { name: 'Payments', exact: true }).click();
+    await openSettings(page, 'Payments');
     await page.getByRole('button', { name: /Edit payment from March 15, 2026/ }).click();
     await noScroll();
   });
@@ -265,7 +294,7 @@ test('a second tab picks up changes instead of overwriting them', async ({ page,
   await createPlan(page);
   const other = await context.newPage();
   await other.goto('/');
-  await expect(other.getByRole('heading', { name: 'Deals in 2026' })).toBeVisible();
+  await expect(other.getByRole('heading', { name: 'Add your deals and paystubs' })).toBeVisible();
   await addDeal(page, 'From Tab One', '1000', '2026-01-10', '2026-02-15');
   await expect(other.getByTestId('deal-row-From Tab One')).toBeVisible();
   await addDeal(other, 'From Tab Two', '2000', '2026-01-11', '2026-02-15');
@@ -284,7 +313,7 @@ test('imports a messy CRM export with column matching, ambiguous dates, and reme
     'Total,,"$110,000.00",,',
   ].join('\n');
   const file = { name: 'opps.csv', mimeType: 'text/csv', buffer: Buffer.from(crm) };
-  await page.getByTestId('import-deals').setInputFiles(file);
+  await (await dealsImport(page)).setInputFiles(file);
   const dlg = page.getByRole('dialog', { name: 'Import deals from a spreadsheet' });
   await expect(dlg).toContainText('using row 2 for column names');
   await expect(dlg.getByLabel('Account name (required)')).toHaveValue('1');
@@ -299,15 +328,17 @@ test('imports a messy CRM export with column matching, ambiguous dates, and reme
   await dlg.getByRole('button', { name: 'Import 2 deals' }).click();
   await expect(dlg).toBeHidden();
   await expect(page.getByText('Imported 2 deals.')).toBeVisible();
+  await backToSummary(page);
   await expect(page.getByTestId('deal-row-Acme')).toBeVisible();
   await expect(page.getByTestId('expected-due')).toHaveText('$11,500.00');
 
   // Next month's export: same layout, one new deal. Choices are remembered and existing deals are skipped.
   const next = crm.replace('Total,,', 'Me,Cedar,"$20,000.00",03/20/2026,OPP-3\nTotal,,');
-  await page.getByTestId('import-deals').setInputFiles({ ...file, buffer: Buffer.from(next) });
+  await (await dealsImport(page)).setInputFiles({ ...file, buffer: Buffer.from(next) });
   await expect(dlg).toContainText('column choices from your last import');
   await expect(dlg.getByTestId('import-summary')).toContainText('1 deal ready · 3 skipped');
   await dlg.getByRole('button', { name: 'Import 1 deal' }).click();
+  await backToSummary(page);
   await expect(page.getByTestId('deal-row-Cedar')).toBeVisible();
   await expect(page.getByTestId('deal-row-Acme')).toHaveCount(1);
 });
@@ -315,7 +346,7 @@ test('imports a messy CRM export with column matching, ambiguous dates, and reme
 test('blocks the whole import when any row has a problem', async ({ page }) => {
   await createPlan(page);
   const csv = 'Customer,ACV,Close Date\nGood,100,2026-01-10\nBad,TBD,2026-01-11\n';
-  await page.getByTestId('import-deals').setInputFiles({ name: 'x.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
+  await (await dealsImport(page)).setInputFiles({ name: 'x.csv', mimeType: 'text/csv', buffer: Buffer.from(csv) });
   const dlg = page.getByRole('dialog', { name: 'Import deals from a spreadsheet' });
   await expect(dlg).toContainText('Row 3: Credited revenue “TBD” isn’t a number');
   await expect(dlg.getByRole('button', { name: /^Import/ })).toBeDisabled();
@@ -334,12 +365,13 @@ test('imports deals and a payment statement from Excel files', async ({ page }) 
 
   await createPlan(page);
   await setAsOf(page, '2026-06-30');
-  await page.getByTestId('import-deals').setInputFiles({ name: 'deals.xlsx', mimeType: xlsxType, buffer: deals });
+  await (await dealsImport(page)).setInputFiles({ name: 'deals.xlsx', mimeType: xlsxType, buffer: deals });
   const dlg = page.getByRole('dialog', { name: 'Import deals from a spreadsheet' });
   await expect(dlg.getByTestId('import-summary')).toContainText('2 deals ready');
   await expect(dlg).toContainText('$50,000.50');
   await expect(dlg).toContainText('Mar 15, 2026');
   await dlg.getByRole('button', { name: 'Import 2 deals' }).click();
+  await backToSummary(page);
   await expect(page.getByTestId('deal-row-Beacon')).toBeVisible();
 
   const statement = await writeExcelFile([
@@ -349,7 +381,7 @@ test('imports deals and a payment statement from Excel files', async ({ page }) 
     [{ value: new Date(Date.UTC(2026, 1, 15)), type: Date, format: 'mm/dd/yyyy' }, { value: 6000, type: Number }, { value: 4100, type: Number }, { value: 'Feb' }],
     [{ value: new Date(Date.UTC(2026, 2, 15)), type: Date, format: 'mm/dd/yyyy' }, { value: 7950, type: Number }, { value: 5400, type: Number }, { value: 'Mar' }],
   ]).toBuffer();
-  await page.getByRole('button', { name: 'Payments', exact: true }).click();
+  await openSettings(page, 'Payments');
   await page.getByTestId('import-payments').setInputFiles({ name: 'statement.xlsx', mimeType: xlsxType, buffer: statement });
   const pdlg = page.getByRole('dialog', { name: 'Import payments from a spreadsheet' });
   await expect(pdlg.getByLabel('Gross commission (required)')).toHaveValue('1');
@@ -391,7 +423,7 @@ test('picks the right tab of a multi-tab workbook and lets you switch', async ({
 
   await createPlan(page);
   await setAsOf(page, '2026-06-30');
-  await page.getByTestId('import-deals').setInputFiles(file);
+  await (await dealsImport(page)).setInputFiles(file);
   const dlg = page.getByRole('dialog', { name: 'Import deals from a spreadsheet' });
   const tabSelect = dlg.getByLabel('Which tab has your deals?');
   await expect(tabSelect.locator('option:checked')).toHaveText('Deals');
@@ -403,10 +435,11 @@ test('picks the right tab of a multi-tab workbook and lets you switch', async ({
   await expect(dlg.getByTestId('import-summary')).toContainText('Choose a column for: Account name');
   await tabSelect.selectOption({ label: 'Deals' });
   await dlg.getByRole('button', { name: 'Import 2 deals' }).click();
+  await backToSummary(page);
   await expect(page.getByTestId('deal-row-Beacon')).toBeVisible();
 
   // Same file on the Payments tab lands on the paystub log.
-  await page.getByRole('button', { name: 'Payments', exact: true }).click();
+  await openSettings(page, 'Payments');
   await page.getByTestId('import-payments').setInputFiles(file);
   const pdlg = page.getByRole('dialog', { name: 'Import payments from a spreadsheet' });
   await expect(pdlg.getByLabel('Which tab has your payments?').locator('option:checked')).toHaveText('Paystub Log');
@@ -417,11 +450,13 @@ test('picks the right tab of a multi-tab workbook and lets you switch', async ({
 });
 
 async function importCsv(page: Page, kind: 'deals' | 'payments', csv: string, order?: 'MDY') {
-  await page.getByTestId(`import-${kind}`).setInputFiles({ name: `${kind}.csv`, mimeType: 'text/csv', buffer: Buffer.from(csv) });
+  const input = kind === 'deals' ? await dealsImport(page) : page.getByTestId('import-payments');
+  await input.setInputFiles({ name: `${kind}.csv`, mimeType: 'text/csv', buffer: Buffer.from(csv) });
   const dlg = page.getByRole('dialog', { name: `Import ${kind} from a spreadsheet` });
   if (order) await dlg.getByLabel(/month first/).check();
   await dlg.getByRole('button', { name: new RegExp(`^Import \\d+ ${kind.slice(0, -1)}`) }).click();
   await expect(dlg).toBeHidden();
+  if (kind === 'deals') await backToSummary(page);
 }
 
 test('auto-matches lump-sum payments to deals and finds the real shortfall', async ({ page }) => {
@@ -432,7 +467,7 @@ test('auto-matches lump-sum payments to deals and finds the real shortfall', asy
     'deals',
     'Account,ARR,Close Date,Expected Payout Date\nAcme,60000,2026-01-20,2026-02-15\nBeacon,30000,2026-02-03,2026-03-15\nCedar,20000,2026-02-25,2026-03-15\nDelta,40000,2026-03-10,2026-04-15\n',
   );
-  await page.getByRole('button', { name: 'Payments', exact: true }).click();
+  await openSettings(page, 'Payments');
   // Feb: Acme exactly. Mar: Beacon + Cedar exactly (Cedar crosses quota: $10k x 10% + $10k x 15%). Apr: only part of Delta.
   await importCsv(page, 'payments', 'Pay Date,Gross Commission\n2026-02-13,6000\n2026-03-13,5500\n2026-04-15,5000\n');
   await page.getByRole('button', { name: 'Match automatically' }).click();
@@ -445,7 +480,7 @@ test('auto-matches lump-sum payments to deals and finds the real shortfall', asy
   await dlg.getByRole('button', { name: 'Match 3 payments' }).click();
   await expect(dlg).toBeHidden();
   await expect(page.getByText('isn’t matched to deals yet')).toHaveCount(0);
-  await page.getByRole('button', { name: 'Overview' }).click();
+  await backToSummary(page);
   await setAsOf(page, '2026-06-30');
   await expect(page.getByTestId('received-due')).toHaveText('$16,500.00');
   await expect(page.getByTestId('deal-row-Delta')).toContainText('Partially received');
@@ -460,7 +495,7 @@ test('imports commission from several PDF paystubs and reads a PDF statement tab
   const pdf = (name: string, buffer: Buffer) => ({ name, mimeType: 'application/pdf', buffer });
 
   await createPlan(page);
-  await page.getByRole('button', { name: 'Payments', exact: true }).click();
+  await openSettings(page, 'Payments');
   // A scanned PDF has no text and is reported plainly.
   await page.getByTestId('import-payments').setInputFiles(pdf('scan.pdf', scanned));
   await expect(page.getByRole('dialog')).toContainText('looks like a scanned image');
@@ -502,10 +537,104 @@ test('imports commission from several PDF paystubs and reads a PDF statement tab
       [320, 85, '2026-02-10'],
     ],
   ]);
-  await page.getByRole('button', { name: 'Overview' }).click();
-  await page.getByTestId('import-deals').setInputFiles(pdf('report.pdf', report));
+  await backToSummary(page);
+  await (await dealsImport(page)).setInputFiles(pdf('report.pdf', report));
   const ddlg = page.getByRole('dialog', { name: 'Import deals from a spreadsheet' });
   await expect(ddlg.getByTestId('import-summary')).toContainText('2 deals ready');
   await ddlg.getByRole('button', { name: 'Import 2 deals' }).click();
+  await backToSummary(page);
   await expect(page.getByTestId('deal-row-Beacon')).toBeVisible();
+});
+
+test('one drop zone: a whole tracker plus paystubs in, the answer out', async ({ page }) => {
+  const { default: writeExcelFile } = await import('write-excel-file/node');
+  const { makePdf, paystub } = await import('../fixtures/makePdf');
+  const date = (y: number, m: number, d: number) => ({ value: new Date(Date.UTC(y, m - 1, d)), type: Date, format: 'mm/dd/yyyy' });
+  const n = (v: number) => ({ value: v, type: Number });
+  const tracker = await writeExcelFile([
+    {
+      sheet: 'Deals',
+      data: [
+        [{ value: '2026 Commission Tracker' }],
+        [],
+        [{ value: 'Opportunity ID' }, { value: 'Account Name' }, { value: 'Close Date' }, { value: 'ARR' }, { value: 'Est. Commission' }],
+        [{ value: 'OPP-1' }, { value: 'Acme' }, date(2026, 1, 20), n(60000), n(6000)],
+        [{ value: 'OPP-2' }, { value: 'Beacon' }, date(2026, 2, 3), n(30000), n(3000)],
+        [{ value: 'OPP-3' }, { value: 'Cedar' }, date(2026, 2, 25), n(20000), n(2000)],
+        [{ value: 'OPP-4' }, { value: 'Delta' }, date(2026, 3, 10), n(40000), n(4000)],
+      ],
+    },
+    { sheet: 'Read Me', data: [[{ value: 'Blue cells are inputs' }]] },
+  ]).toBuffer();
+  // Paid the month after close. Feb: Acme. Mar: Beacon + Cedar ($3,000 + $2,500, Cedar crosses quota). Apr: only $5,000 of Delta's $6,000.
+  const feb = await makePdf([paystub('02/13/2026', '6,000.00', '6,000.00')]);
+  const mar = await makePdf([paystub('03/13/2026', '5,500.00', '11,500.00')]);
+  const apr = await makePdf([paystub('04/15/2026', '5,000.00', '16,500.00')]);
+
+  await createPlan(page);
+  await page.getByTestId('drop-files').setInputFiles([
+    { name: 'my-tracker.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: tracker },
+    { name: 'paystub-feb.pdf', mimeType: 'application/pdf', buffer: feb },
+    { name: 'paystub-mar.pdf', mimeType: 'application/pdf', buffer: mar },
+    { name: 'paystub-apr.pdf', mimeType: 'application/pdf', buffer: apr },
+  ]);
+  const dlg = page.getByRole('dialog', { name: 'Here’s what we found' });
+  const sources = dlg.getByTestId('drop-sources');
+  await expect(sources).toContainText('my-tracker.xlsx › Deals');
+  await expect(sources).toContainText('4 deals');
+  await expect(sources).toContainText('Commission $5,500.00 paid March 13, 2026');
+  // The file has no payout dates, so we estimate them from the close date.
+  await dlg.getByLabel('Commission is usually paid this many days after close').fill('25');
+  // Leave best guesses for us to review this time.
+  await dlg.getByLabel(/make a best guess/).uncheck();
+  await dlg.getByTestId('drop-confirm').click();
+  await expect(dlg).toBeHidden();
+  await expect(page.getByText('Added 4 deals and 3 payments. Matched 2 payments to deals. 1 payment still needs matching.')).toBeVisible();
+
+  // The leftover best guess is the only thing to review.
+  await page.getByRole('button', { name: 'Review matches' }).click();
+  const review = page.getByRole('dialog', { name: 'Match payments to deals' });
+  await expect(review.getByTestId('match-summary')).toHaveText('1 best guess');
+  await expect(review).toContainText('Delta: $5,000.00 of $6,000.00 outstanding');
+  await review.getByRole('button', { name: 'Match 1 payment' }).click();
+
+  await setAsOf(page, '2026-06-30');
+  await expect(page.getByTestId('difference')).toHaveText('$1,000.00');
+  await expect(page.getByTestId('difference-explainer')).toContainText('Delta');
+  await expect(page.getByText('Provisional')).toHaveCount(0);
+
+  // Dropping the same files again adds nothing.
+  await page.getByTestId('drop-files').setInputFiles([
+    { name: 'my-tracker.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: tracker },
+    { name: 'paystub-feb.pdf', mimeType: 'application/pdf', buffer: feb },
+  ]);
+  await expect(dlg.getByTestId('drop-confirm')).toHaveText('Nothing new to add');
+  await expect(dlg.getByTestId('drop-confirm')).toBeDisabled();
+});
+
+test('best guesses are applied by default and named so they can be checked', async ({ page }) => {
+  const { makePdf, paystub } = await import('../fixtures/makePdf');
+  const deals = 'Account,ARR,Close Date,Expected Payout Date\nAcme,60000,2026-01-20,2026-02-15\nDelta,40000,2026-03-10,2026-04-15\n';
+  const apr = await makePdf([paystub('04/15/2026', '5,000.00', '11,000.00')]);
+  await createPlan(page);
+  await page.getByTestId('drop-files').setInputFiles([
+    { name: 'deals.csv', mimeType: 'text/csv', buffer: Buffer.from(deals) },
+    { name: 'paystub-apr.pdf', mimeType: 'application/pdf', buffer: apr },
+  ]);
+  const dlg = page.getByRole('dialog', { name: 'Here’s what we found' });
+  await dlg.getByTestId('drop-confirm').click();
+  await expect(page.getByText(/One was a best guess because the amounts didn’t add up exactly \(Apr 15, 2026\)/)).toBeVisible();
+  await expect(page.getByText('Some payments need a quick look.')).toHaveCount(0);
+  await setAsOf(page, '2026-06-30');
+  // The $5,000 fills Delta ($4,000, due that day) first, then $1,000 of Acme, which stays short.
+  await expect(page.getByTestId('difference-explainer')).toContainText('Acme');
+});
+
+test('start screen fits small phones', async ({ page }) => {
+  for (const width of [320, 375]) {
+    await page.setViewportSize({ width, height: 800 });
+    if (width === 320) await createPlan(page);
+    await expect(page.getByRole('heading', { name: 'Add your deals and paystubs' })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width);
+  }
 });
