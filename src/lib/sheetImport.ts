@@ -256,6 +256,37 @@ export function pickTab(kind: ImportKind, tabs: readonly Tab[]): number {
   return best;
 }
 
+/** How strongly a sheet's columns look like the given kind, and whether every required field matched. */
+export function scoreSheet(kind: ImportKind, sheet: Sheet): { score: number; complete: boolean; mapping: Mapping } {
+  const mapping = guessMapping(kind, sheet.headers);
+  let score = 0;
+  let complete = true;
+  for (const f of fieldsFor(kind)) {
+    const col = mapping[f.key];
+    if (col === null || col === undefined) {
+      if (f.required) complete = false;
+      continue;
+    }
+    score += scoreHeader(f, sheet.headers[col]) * (f.required ? 10 : 1);
+  }
+  return { score, complete, mapping };
+}
+
+/**
+ * Decide whether a tab holds deals, payments, or neither. A tab qualifies for
+ * a kind only when all its required fields match; when it qualifies for both,
+ * the closer match wins.
+ */
+export function classifyTab(tab: Tab): { kind: ImportKind; sheet: Sheet; mapping: Mapping } | null {
+  const sheet = buildSheet(tab.rows);
+  if ('error' in sheet) return null;
+  const deals = scoreSheet('deals', sheet);
+  const payments = scoreSheet('payments', sheet);
+  if (deals.complete && (!payments.complete || deals.score >= payments.score)) return { kind: 'deals', sheet, mapping: deals.mapping };
+  if (payments.complete) return { kind: 'payments', sheet, mapping: payments.mapping };
+  return null;
+}
+
 /** Signature of a file's columns, used to remember the user's mapping for next time. */
 export function headerSignature(kind: ImportKind, headers: readonly string[]): string {
   return `${kind}:${headers.map(normalizeHeader).join('|')}`;

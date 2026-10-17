@@ -50,6 +50,18 @@ The calculation module lives in `src/lib/calc.ts`. It's pure and has its own tes
 - Quota attainment starts over each calendar year. A January payment can settle a December deal from the year before without counting toward the new year's quota.
 - `difference = expected − received as of the date`. Expected commissions are always derived, never stored.
 
+## The quick way: one drop zone
+
+After the three plan questions (quota, base rate, accelerator), the app opens on **Add your deals and paystubs**. Drop everything there at once, or use **Choose files**: a CRM export or your own tracker (CSV or Excel, every tab), paystub PDFs, or a table-style PDF report.
+
+- Each file, and each tab of a workbook, is recognized as **deals**, **payments**, or a **paystub**. Anything else (a Read Me tab, a monthly summary) is left out and listed.
+- One review shows what was found. Day/month order is asked once if needed, and if your deals have no payout dates, you set how many days after close commission is usually paid.
+- **Duplicates are skipped:** deals with a reference you already have, and paychecks with the same date and amount as one already added or in another dropped file. A tracker's paystub log plus the paystub PDFs count once.
+- **Payments are matched to deals for you:** exact matches always, and best guesses (on by default) when amounts don't add up. The confirmation names the best-guess payments so you can check them.
+- Next month, drop the new paystub (and an updated deals export) into the smaller drop zone under the answer.
+
+The overview leads with the answer ("You may be owed $3,600, short on 2 deals") and an **Ask payroll about this** button. Payments, the commission plan, step-by-step imports with column matching, exports, and backups are under **Details** in the header.
+
 ## Supported plans and limitations
 
 The app supports one plan per calendar year in USD, with a single marginal accelerator above an annual quota. It **does not** model:

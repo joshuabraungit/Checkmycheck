@@ -10,12 +10,8 @@ import { useStore, type SaveState } from './state';
 
 export type View = 'overview' | 'payments' | 'plans' | 'data';
 
-const VIEWS: Array<{ id: View; label: string }> = [
-  { id: 'overview', label: 'Overview' },
-  { id: 'payments', label: 'Payments' },
-];
-
 const SETTINGS: Array<{ id: View; label: string }> = [
+  { id: 'payments', label: 'Payments' },
   { id: 'plans', label: 'Commission plan' },
   { id: 'data', label: 'Backup & files' },
 ];
@@ -57,7 +53,7 @@ function SettingsMenu({ view, onPick }: { view: View; onPick: (v: View) => void 
         <span aria-hidden="true" className="settings-icon">
           ⚙
         </span>
-        <span className="settings-label">Settings</span> <span aria-hidden="true">▾</span>
+        <span className="settings-label">Details</span> <span aria-hidden="true">▾</span>
       </button>
       {open && (
         <ul id="settings-menu" className="settings-menu">
@@ -157,7 +153,7 @@ export default function App() {
             <span className="brand-mark" aria-hidden="true">
               ✓
             </span>
-            Check My Check
+            <span className="brand-name">Check My Check</span>
           </div>
           <div className="topbar-right">
             <SaveIndicator state={store.saveState} error={store.saveError} />
@@ -207,22 +203,12 @@ export default function App() {
         </main>
       ) : (
         <>
-          <nav className="tabs" aria-label="Sections">
-            <div className="tabs-inner">
-              {VIEWS.map((v) => (
-                <button
-                  key={v.id}
-                  type="button"
-                  className={`tab${view === v.id ? ' active' : ''}`}
-                  aria-current={view === v.id ? 'page' : undefined}
-                  onClick={() => setView(v.id)}
-                >
-                  {v.label}
-                </button>
-              ))}
-            </div>
-          </nav>
           <main id="main" className="page">
+            {view !== 'overview' && (
+              <button type="button" className="link-btn back-link" onClick={() => setView('overview')}>
+                ← Back to summary
+              </button>
+            )}
             {view === 'overview' && selectedYear !== null && (
               <Dashboard
                 year={selectedYear}

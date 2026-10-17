@@ -807,6 +807,9 @@ textarea {
   color: var(--text);
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
 }
+.modal {
+  text-align: left;
+}
 .modal-wide {
   width: min(760px, calc(100vw - 24px));
 }
@@ -1154,6 +1157,11 @@ textarea {
   .brand,
   .topbar-right .btn {
     white-space: nowrap;
+    padding-left: 0.45rem;
+    padding-right: 0.45rem;
+  }
+  .topbar-inner {
+    gap: 0.5rem;
   }
   .brand {
     font-size: 1rem;
@@ -1375,5 +1383,89 @@ label.btn[aria-disabled='true'] {
 @media (max-width: 720px) {
   .stub-fields {
     grid-template-columns: 1fr;
+  }
+}
+
+/* Drop zone */
+.dropzone {
+  border: 2px dashed #c9c4b7;
+  border-radius: var(--radius);
+  background: var(--surface);
+  padding: 1.75rem 1.25rem;
+  text-align: center;
+  margin: 1rem 0;
+  transition: border-color 0.15s, background 0.15s;
+}
+.dropzone.is-dragging {
+  border-color: var(--green);
+  background: var(--green-soft);
+}
+.dropzone-title {
+  font-size: 1.15rem;
+  font-weight: 600;
+  margin-bottom: 0.4rem;
+}
+.dropzone > .muted {
+  max-width: 52ch;
+  margin: 0 auto 1rem;
+}
+.dropzone-compact {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem 0.75rem;
+  padding: 0.75rem 1rem;
+}
+.dropzone-compact .dropzone-title {
+  font-size: 1rem;
+  font-weight: 400;
+  margin: 0;
+}
+.dropzone-status {
+  margin: 0.75rem 0 0;
+}
+.drop-message {
+  margin: 0 0 1rem;
+}
+.start {
+  text-align: center;
+}
+.start h2 {
+  font-size: 1.4rem;
+}
+.start .dropzone {
+  background: var(--bg);
+}
+.source-list {
+  list-style: none;
+  margin: 0 0 1rem;
+  padding: 0;
+}
+.source {
+  border-bottom: 1px solid var(--border);
+  padding: 0.6rem 0;
+}
+.source p {
+  margin: 0.2rem 0;
+}
+.source-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+.back-link {
+  display: inline-block;
+  margin-bottom: 1rem;
+}
+
+@media (max-width: 360px) {
+  .brand-name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
   }
 }
