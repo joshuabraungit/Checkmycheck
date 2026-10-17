@@ -1,17 +1,20 @@
 import { expect, test, type Page } from '@playwright/test';
 
+async function answerPlanQuestions(page: Page) {
+  await page.getByLabel('What’s your annual quota? ($)').fill('100000');
+  await page.getByLabel('What % of each deal do you earn? (%)').fill('10');
+  await page.getByLabel('Higher % once you pass quota? (optional)').fill('15');
+  // What isn't supported is one click away, not a wall of text.
+  await expect(page.getByText(/Splits, caps, tiers, or clawbacks\?/)).toBeVisible();
+}
+
+/** Typing path: landing, then the three plan questions, then the empty start screen. */
 async function createPlan(page: Page) {
   await page.goto('/');
-  await expect(page.getByRole('heading', { name: 'Did your commission check add up?' })).toBeVisible();
-  await page.getByRole('button', { name: 'Start my tracker' }).click();
-  await page.getByLabel('Calendar year').fill('2026');
-  await page.getByLabel('Annual quota (credited revenue, $)').fill('100000');
-  await page.getByLabel('Base commission rate (%)').fill('10');
-  await page.getByLabel('Accelerator rate (%)').fill('15');
-  // Unsupported features are listed before confirming.
-  await expect(page.getByText('Retroactive accelerators')).toBeVisible();
-  await page.getByLabel('My plan uses the credited revenue entered here and a marginal accelerator above an annual quota.').check();
-  await page.getByRole('button', { name: 'Save plan and continue' }).click();
+  await expect(page.getByRole('heading', { name: /You closed the deal\.\s*Did you get paid for it\?/ })).toBeVisible();
+  await page.getByRole('button', { name: 'Prefer typing? Enter deals by hand' }).click();
+  await answerPlanQuestions(page);
+  await page.getByRole('button', { name: 'Continue →' }).click();
   // A new tracker opens on the start screen with the drop zone.
   await expect(page.getByRole('heading', { name: 'Add your deals and paystubs' })).toBeVisible();
 }
@@ -62,7 +65,7 @@ async function dealsImport(page: Page) {
   return page.getByTestId('import-deals');
 }
 
-async function openSettings(page: Page, item: 'Payments' | 'Commission plan' | 'Backup & files') {
+async function openSettings(page: Page, item: 'Payments' | 'Commission plan' | 'Backup & files' | 'See an example') {
   await page.getByRole('button', { name: 'Details' }).click();
   await page.locator('#settings-menu').getByRole('button', { name: item }).click();
 }
@@ -175,7 +178,7 @@ test('demo mode shows exact totals and never overwrites personal records', async
   await setAsOf(page, '2026-06-30');
   await addDeal(page, 'My Real Deal', '12345.67', '2026-03-03', '2026-04-15');
 
-  await page.getByRole('button', { name: 'View example' }).click();
+  await openSettings(page, 'See an example');
   await expect(page.getByText('Example workspace.')).toBeVisible();
   await expect(page.getByLabel('As of')).toHaveValue('2026-03-31');
   await expect(page.getByTestId('expected-due')).toHaveText('$14,500.00');
@@ -200,7 +203,7 @@ test('demo mode shows exact totals and never overwrites personal records', async
   await expect(page.getByTestId('deal-row-My Real Deal')).toBeVisible();
 
   // A fresh visit to the example starts from the original numbers.
-  await page.getByRole('button', { name: 'View example' }).click();
+  await openSettings(page, 'See an example');
   await expect(page.getByTestId('deal-row-Demo Only')).toHaveCount(0);
   await expect(page.getByTestId('difference')).toHaveText('$550.00');
 });
@@ -546,7 +549,7 @@ test('imports commission from several PDF paystubs and reads a PDF statement tab
   await expect(page.getByTestId('deal-row-Beacon')).toBeVisible();
 });
 
-test('one drop zone: a whole tracker plus paystubs in, the answer out', async ({ page }) => {
+test('first visit: upload on the landing page, three questions, the answer', async ({ page }) => {
   const { default: writeExcelFile } = await import('write-excel-file/node');
   const { makePdf, paystub } = await import('../fixtures/makePdf');
   const date = (y: number, m: number, d: number) => ({ value: new Date(Date.UTC(y, m - 1, d)), type: Date, format: 'mm/dd/yyyy' });
@@ -570,64 +573,61 @@ test('one drop zone: a whole tracker plus paystubs in, the answer out', async ({
   const feb = await makePdf([paystub('02/13/2026', '6,000.00', '6,000.00')]);
   const mar = await makePdf([paystub('03/13/2026', '5,500.00', '11,500.00')]);
   const apr = await makePdf([paystub('04/15/2026', '5,000.00', '16,500.00')]);
-
-  await createPlan(page);
-  await page.getByTestId('drop-files').setInputFiles([
+  const files = [
     { name: 'my-tracker.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: tracker },
     { name: 'paystub-feb.pdf', mimeType: 'application/pdf', buffer: feb },
     { name: 'paystub-mar.pdf', mimeType: 'application/pdf', buffer: mar },
     { name: 'paystub-apr.pdf', mimeType: 'application/pdf', buffer: apr },
-  ]);
-  const dlg = page.getByRole('dialog', { name: 'Here’s what we found' });
-  const sources = dlg.getByTestId('drop-sources');
-  await expect(sources).toContainText('my-tracker.xlsx › Deals');
-  await expect(sources).toContainText('4 deals');
-  await expect(sources).toContainText('Commission $5,500.00 paid March 13, 2026');
-  // The file has no payout dates, so we estimate them from the close date.
-  await dlg.getByLabel('Commission is usually paid this many days after close').fill('25');
-  // Leave best guesses for us to review this time.
-  await dlg.getByLabel(/make a best guess/).uncheck();
-  await dlg.getByTestId('drop-confirm').click();
-  await expect(dlg).toBeHidden();
-  await expect(page.getByText('Added 4 deals and 3 payments. Matched 2 payments to deals. 1 payment still needs matching.')).toBeVisible();
+  ];
 
-  // The leftover best guess is the only thing to review.
-  await page.getByRole('button', { name: 'Review matches' }).click();
-  const review = page.getByRole('dialog', { name: 'Match payments to deals' });
-  await expect(review.getByTestId('match-summary')).toHaveText('1 best guess');
-  await expect(review).toContainText('Delta: $5,000.00 of $6,000.00 outstanding');
-  await review.getByRole('button', { name: 'Match 1 payment' }).click();
+  await page.goto('/');
+  await page.getByTestId('landing-files').setInputFiles(files);
+  await expect(page.getByRole('heading', { name: 'Three quick questions about your plan' })).toBeVisible();
+  await expect(page.getByText('Your files are ready. These are on your comp plan document. We’ll use them for 2026.')).toBeVisible();
+  await answerPlanQuestions(page);
+  await page.getByRole('button', { name: 'Show my answer →' }).click();
 
+  // No review step: nothing needed deciding.
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByText(/^Added 4 deals and 3 payments\. Matched 3 payments to deals\. One was a best guess .*\(Apr 15, 2026\).*We assumed commission is paid about 30 days after close/)).toBeVisible();
   await setAsOf(page, '2026-06-30');
   await expect(page.getByTestId('difference')).toHaveText('$1,000.00');
   await expect(page.getByTestId('difference-explainer')).toContainText('Delta');
-  await expect(page.getByText('Provisional')).toHaveCount(0);
+  await expect(page.getByText('Not final yet')).toHaveCount(0);
 
-  // Dropping the same files again adds nothing.
-  await page.getByTestId('drop-files').setInputFiles([
-    { name: 'my-tracker.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: tracker },
-    { name: 'paystub-feb.pdf', mimeType: 'application/pdf', buffer: feb },
-  ]);
-  await expect(dlg.getByTestId('drop-confirm')).toHaveText('Nothing new to add');
-  await expect(dlg.getByTestId('drop-confirm')).toBeDisabled();
+  // Undo takes the files back out, but keeps the plan.
+  await page.getByRole('button', { name: 'Undo' }).click();
+  await expect(page.getByRole('heading', { name: 'Add your deals and paystubs' })).toBeVisible();
+
+  // Dropping them again adds them again; dropping a third time adds nothing.
+  await page.getByTestId('drop-files').setInputFiles(files);
+  await expect(page.getByText(/^Added 4 deals and 3 payments\./)).toBeVisible();
+  await page.getByTestId('drop-files').setInputFiles(files.slice(0, 2));
+  await expect(page.getByText('Nothing new to add. Those deals and paychecks are already here.')).toBeVisible();
 });
 
-test('best guesses are applied by default and named so they can be checked', async ({ page }) => {
+test('the review only appears when there is a question to answer', async ({ page }) => {
   const { makePdf, paystub } = await import('../fixtures/makePdf');
-  const deals = 'Account,ARR,Close Date,Expected Payout Date\nAcme,60000,2026-01-20,2026-02-15\nDelta,40000,2026-03-10,2026-04-15\n';
-  const apr = await makePdf([paystub('04/15/2026', '5,000.00', '11,000.00')]);
+  // 01/02 vs 02/01 can't be told apart, so we have to ask.
+  const deals = 'Account,ARR,Close Date,Expected Payout Date\nAcme,60000,01/02/2026,02/03/2026\nDelta,40000,03/04/2026,04/05/2026\n';
+  const apr = await makePdf([paystub('2026-04-05', '5,000.00', '11,000.00')]);
   await createPlan(page);
   await page.getByTestId('drop-files').setInputFiles([
     { name: 'deals.csv', mimeType: 'text/csv', buffer: Buffer.from(deals) },
     { name: 'paystub-apr.pdf', mimeType: 'application/pdf', buffer: apr },
   ]);
   const dlg = page.getByRole('dialog', { name: 'Here’s what we found' });
+  await expect(dlg.getByTestId('drop-confirm')).toBeDisabled();
+  await dlg.getByLabel('January 2 (month first, US style)').check();
+  // Leave best guesses for us to review this time.
+  await dlg.getByLabel(/make a best guess/).uncheck();
   await dlg.getByTestId('drop-confirm').click();
-  await expect(page.getByText(/One was a best guess because the amounts didn’t add up exactly \(Apr 15, 2026\)/)).toBeVisible();
-  await expect(page.getByText('Some payments need a quick look.')).toHaveCount(0);
-  await setAsOf(page, '2026-06-30');
-  // The $5,000 fills Delta ($4,000, due that day) first, then $1,000 of Acme, which stays short.
-  await expect(page.getByTestId('difference-explainer')).toContainText('Acme');
+  await expect(page.getByText('Added 2 deals and 1 payment. 1 payment still needs matching.')).toBeVisible();
+  await page.getByRole('button', { name: 'Review matches' }).click();
+  const review = page.getByRole('dialog', { name: 'Match payments to deals' });
+  await expect(review.getByTestId('match-summary')).toHaveText('1 best guess');
+  await review.getByRole('button', { name: 'Match 1 payment' }).click();
+  await expect(page.getByText('Not final yet')).toHaveCount(0);
 });
 
 test('start screen fits small phones', async ({ page }) => {

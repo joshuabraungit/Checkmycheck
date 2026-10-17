@@ -8,8 +8,9 @@ import { suggestMatches } from './autoMatch';
 import { appendDeals, appendPayments, setPaymentAllocations } from './ops';
 import { parsePaystubDates, type PaystubResult } from './pdfText';
 import { sumCents } from './money';
+import { formatDateShort } from './dates';
 import {
-  buildDeals, buildPayments, classifyTab, dateValues, detectDateOrder, DEFAULT_OPTIONS, type BuildResult, type DateOrder, type Mapping,
+  buildDeals, buildPayments, classifyTab, dateValues, detectDateOrder, DEFAULT_OPTIONS, parseFlexibleDate, type BuildResult, type DateOrder, type Mapping,
   type Sheet, type Tab,
 } from './sheetImport';
 import { newId, type Deal, type Payment, type Workspace } from './types';
@@ -176,4 +177,78 @@ export function applyDrop(
     guessed: applied.filter((m) => m.kind === 'best_guess').map((m) => m.payment),
     unmatched: matches.length - applied.length,
   };
+}
+
+function plural(n: number, word: string): string {
+  return `${n} ${n === 1 ? word : `${word}s`}`;
+}
+
+/** Something only the person can settle: ambiguous day/month dates, or rows that can't be read. */
+export function needsDecision(a: DropAnalysis): boolean {
+  return a.needsDateOrder || a.sources.some((s) => (s.kind === 'deals' || s.kind === 'payments') && s.result.errors.length > 0);
+}
+
+/** Plain-language summary of what a drop did. */
+export function dropMessage(a: DropAnalysis, r: ReturnType<typeof applyDrop>, expectedPaymentDays: number): string {
+  const what = [r.deals ? plural(r.deals, 'deal') : '', r.payments ? plural(r.payments, 'payment') : ''].filter(Boolean).join(' and ');
+  const parts = [`Added ${what}.`];
+  if (r.matched) parts.push(`Matched ${plural(r.matched, 'payment')} to deals.`);
+  if (r.guessed.length) {
+    const dates = r.guessed.map((p) => formatDateShort(p.paymentDate)).join(', ');
+    parts.push(
+      `${r.guessed.length === 1 ? 'One was a best guess' : `${r.guessed.length} were best guesses`} because the amounts didn’t add up exactly (${dates}), so check ${r.guessed.length === 1 ? 'it' : 'them'} under Details › Payments.`,
+    );
+  }
+  if (r.unmatched) parts.push(`${plural(r.unmatched, 'payment')} still ${r.unmatched === 1 ? 'needs' : 'need'} matching.`);
+  const estimated = a.sources.some((s) => s.kind === 'deals' && (s.mapping.expectedPaymentDate === null || s.mapping.expectedPaymentDate === undefined));
+  if (estimated && r.deals) parts.push(`We assumed commission is paid about ${expectedPaymentDays} days after close; edit a deal if that’s off.`);
+  const unused = a.sources.filter((s) => s.kind === 'ignored').map((s) => s.label);
+  if (unused.length) parts.push(`Skipped ${unused.join(', ')} (couldn’t tell what ${unused.length === 1 ? 'it holds' : 'they hold'}).`);
+  return parts.join(' ');
+}
+
+export type AutoDropResult =
+  | { kind: 'review' }
+  | { kind: 'nothing'; message: string }
+  | { kind: 'applied'; workspace: Workspace; message: string };
+
+/**
+ * Add a drop without a review step when nothing needs deciding. Defaults:
+ * commission paid about 30 days after close, best guesses on.
+ */
+export function autoDrop(files: readonly DroppedFile[], ws: Workspace, expectedPaymentDays = 30): AutoDropResult {
+  const a = analyzeDrop(files, ws, { dateOrder: null, expectedPaymentDays });
+  if (needsDecision(a)) return { kind: 'review' };
+  const r = applyDrop(ws, a.sources);
+  if (!r.deals && !r.payments) {
+    const unused = a.sources.filter((s) => s.kind === 'ignored');
+    return {
+      kind: 'nothing',
+      message: unused.length && unused.length === a.sources.length
+        ? `Couldn’t tell what ${unused.length === 1 ? 'that file holds' : 'those files hold'}. Deals need an account, an amount, and a close date; paystubs need a commission line.`
+        : 'Nothing new to add. Those deals and paychecks are already here.',
+    };
+  }
+  return { kind: 'applied', workspace: r.workspace, message: dropMessage(a, r, expectedPaymentDays) };
+}
+
+/** Years of the deals' close dates, so the plan can be set up without asking. */
+export function dealYears(files: readonly DroppedFile[]): number[] {
+  const years = new Set<number>();
+  for (const f of files) {
+    if (!('tabs' in f)) continue;
+    for (const tab of f.tabs) {
+      const c = classifyTab(tab);
+      if (!c || c.kind !== 'deals') continue;
+      const col = c.mapping.closeDate;
+      if (col === null || col === undefined) continue;
+      for (const row of c.sheet.rows) {
+        // Day/month order doesn't change the year.
+        const p = parseFlexibleDate(row[col] ?? '', 'MDY');
+        const q = p.ok ? p : parseFlexibleDate(row[col] ?? '', 'DMY');
+        if (q.ok) years.add(Number(q.value.slice(0, 4)));
+      }
+    }
+  }
+  return [...years].sort((a, b) => a - b);
 }
