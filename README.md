@@ -76,7 +76,22 @@ These limits show up during plan setup, and you have to confirm your plan fits b
 - **Allocation CSV export**: `allocation_id, payment_id, deal_id, amount_usd`
 - **Reconciliation CSV export**: `as_of_date, plan_year, deal_id, account, close_date, expected_payment_date, credited_revenue_usd, expected_commission_usd, received_as_of_usd, signed_difference_usd, status`
 
-CSV imports support quoted fields, commas, and line breaks inside fields. They show a preview and report errors by row. A file with any invalid row imports nothing. Blank IDs get new UUIDs. An ID that already exists blocks the import instead of overwriting anything. Rows are never deduplicated by account name. Exported text cells that start with `=`, `+`, `-`, `@`, tab, or carriage return get an apostrophe prefix to block spreadsheet formula injection, and that prefix is removed again on import.
+Files in this exact format import with their IDs and same-day order kept. Imports show a preview and report errors by row, and a file with any invalid row imports nothing. Blank IDs get new UUIDs. An ID that already exists blocks the import instead of overwriting anything. Rows are never deduplicated by account name. Exported text cells that start with `=`, `+`, `-`, `@`, tab, or carriage return get an apostrophe prefix to block spreadsheet formula injection, and that prefix is removed again on import.
+
+### Spreadsheet import (any layout)
+
+**Import from spreadsheet** (Overview), **Import statement** (Payments), and the import buttons on **Backup & files** accept any CSV or Excel `.xlsx` file, such as a CRM opportunity export, a commission statement, or a personal tracker. Everything happens in the browser.
+
+- **Header detection:** title rows above the column names are skipped. Totals rows (starting with "Total") are skipped and listed.
+- **Column matching:** columns are matched to fields automatically (for example `Account Name`, `ACV`, `Closed Won Date`, `Opportunity ID`, or `Pay Date`, `Gross Commission`). You confirm or change each match. A column with "commission" in its name is never used as deal revenue, and "net pay" is never used as gross commission.
+- **Tolerant values:** money like `$60,000.00` or `USD 1,250.5`, and dates like `2026-01-10`, `1/30/26`, `Jan 10, 2026`, or `10-Jan-2026`. Excel date and number cells are read exactly, without time zone shifts or floating-point rounding.
+- **Ambiguous dates:** when numeric dates could be month-first or day-first (like `01/02/2026`) and the file doesn't settle it, you're asked which, instead of the app guessing.
+- **Expected payment dates:** if the file has none, or a row is blank, it's estimated as close date plus a number of days you choose (30 by default). Every deal can be edited later.
+- **Re-imports:** deals with a reference or ID you already have, and payments with the same date, amount, and reference as one you already have, are skipped by default. That makes importing next month's full export safe.
+- **Years without a plan:** rows from those years either block the import or, if you choose, are skipped.
+- **Remembered choices:** your column matches and options are saved in this browser for each file layout, so the next import of the same layout is one click.
+- **All or nothing:** any row with a problem blocks the whole import, with row numbers matching the spreadsheet. Imported payments start unallocated.
+- **Not supported:** legacy `.xls` files (save as `.xlsx` or CSV), multi-sheet workbooks (the first sheet is read), and European number formats like `1.234,56`.
 
 ## Example workspace
 

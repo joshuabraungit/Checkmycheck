@@ -9,6 +9,7 @@ import { DealDetail } from './DealDetail';
 import { DealForm } from './DealForm';
 import { InquiryDialog } from './InquiryDialog';
 import { downloadText } from './ui';
+import { SpreadsheetImportButton } from './SpreadsheetImport';
 
 type SortKey = 'commission' | 'account' | 'expectedDate' | 'expected' | 'received' | 'difference' | 'status';
 
@@ -306,6 +307,7 @@ export function Dashboard({ year, years, onYear, asOf, onAsOf, onGoToPayments }:
           <button type="button" className="btn btn-primary" onClick={() => setForm({})}>
             Add deal
           </button>
+          <SpreadsheetImportButton kind="deals" label="Import from spreadsheet" />
           <button
             type="button"
             className="btn"
@@ -319,7 +321,7 @@ export function Dashboard({ year, years, onYear, asOf, onAsOf, onGoToPayments }:
 
       {rec.rows.length === 0 ? (
         <div className="empty panel">
-          <p>No deals in {year} yet. Add your first deal to see its expected commission.</p>
+          <p>No deals in {year} yet. Add your first deal to see its expected commission, or import a CSV or Excel export from your CRM.</p>
         </div>
       ) : (
         <>

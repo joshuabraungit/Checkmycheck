@@ -2,34 +2,12 @@ import { useRef, useState, type ChangeEvent } from 'react';
 import { parseBackupJson, workspaceToBackupJson, type BackupPreview } from '../lib/backup';
 import { reconcile } from '../lib/calc';
 import {
-  allocationsToCsv, dealsToCsv, dealTemplateCsv, parseDealCsv, parsePaymentCsv, paymentsToCsv, paymentTemplateCsv,
-  reconciliationToCsv, type RowError,
+  allocationsToCsv, dealsToCsv, dealTemplateCsv, paymentsToCsv, paymentTemplateCsv, reconciliationToCsv,
 } from '../lib/csv';
 import { formatDateShort, todayLocal } from '../lib/dates';
-import { formatCents, sumCents } from '../lib/money';
-import { appendDeals, appendPayments } from '../lib/ops';
-import type { Deal, Payment } from '../lib/types';
 import { useStore } from '../state';
+import { SpreadsheetImportButton } from './SpreadsheetImport';
 import { downloadText, FormError, Modal } from './ui';
-
-function ErrorList({ errors }: { errors: RowError[] }) {
-  return (
-    <div className="form-error" role="alert">
-      <p>
-        <strong>Nothing was imported.</strong> Fix these {errors.length === 1 ? 'problem' : 'problems'} in the file and try again:
-      </p>
-      <ul className="error-list">
-        {errors.slice(0, 50).map((e, i) => (
-          <li key={i}>
-            {e.row > 0 ? `Row ${e.row}: ` : ''}
-            {e.message}
-          </li>
-        ))}
-      </ul>
-      {errors.length > 50 && <p>…and {errors.length - 50} more.</p>}
-    </div>
-  );
-}
 
 function FilePicker({ id, label, accept, onText }: { id: string; label: string; accept: string; onText: (text: string, name: string) => void }) {
   const ref = useRef<HTMLInputElement>(null);
@@ -50,14 +28,8 @@ function FilePicker({ id, label, accept, onText }: { id: string; label: string; 
   );
 }
 
-type ImportState =
-  | { kind: 'deals'; ok: true; items: Deal[]; fileName: string }
-  | { kind: 'payments'; ok: true; items: Payment[]; fileName: string }
-  | { kind: 'deals' | 'payments'; ok: false; errors: RowError[]; fileName: string };
-
 export function DataView({ year, asOf }: { year: number; asOf: string }) {
   const { ws, commit, mode } = useStore();
-  const [importState, setImportState] = useState<ImportState | null>(null);
   const [restore, setRestore] = useState<{ preview: BackupPreview; fileName: string } | null>(null);
   const [restoreErrors, setRestoreErrors] = useState<string[] | null>(null);
   const [restoreConfirmed, setRestoreConfirmed] = useState(false);
@@ -69,22 +41,6 @@ export function DataView({ year, asOf }: { year: number; asOf: string }) {
 
   function exportBackup() {
     downloadText(`${prefix}-backup-${stamp}.json`, workspaceToBackupJson(ws), 'application/json');
-  }
-
-  async function confirmImport() {
-    if (!importState || !importState.ok) return;
-    setSaving(true);
-    setError(null);
-    try {
-      const next = importState.kind === 'deals' ? appendDeals(ws, importState.items) : appendPayments(ws, importState.items);
-      await commit(next);
-      setMessage(`Imported ${importState.items.length} ${importState.kind}.`);
-      setImportState(null);
-    } catch (e) {
-      setError(`Not imported. ${(e as Error).message}`);
-    } finally {
-      setSaving(false);
-    }
   }
 
   async function confirmRestore() {
@@ -161,22 +117,13 @@ export function DataView({ year, asOf }: { year: number; asOf: string }) {
         </article>
 
         <article className="panel">
-          <h2 className="h3">Deals (CSV)</h2>
-          <p className="muted">Import adds new deals to existing plan years. Rows with an existing deal ID are blocked, not overwritten.</p>
+          <h2 className="h3">Deals</h2>
+          <p className="muted">Import a CSV or Excel file, like a CRM export or your own tracker. You’ll match its columns before anything is saved. Deals you already have are skipped, never overwritten.</p>
           <div className="actions-inline">
             <button type="button" className="btn" onClick={() => downloadText(`${prefix}-deals-${stamp}.csv`, dealsToCsv(ws))} disabled={!ws.deals.length}>
               Export deals
             </button>
-            <FilePicker
-              id="deal-csv"
-              label="Import deals…"
-              accept=".csv,text/csv"
-              onText={(text, fileName) => {
-                setMessage(null);
-                const r = parseDealCsv(text, ws);
-                setImportState(r.ok ? { kind: 'deals', ok: true, items: r.items, fileName } : { kind: 'deals', ok: false, errors: r.errors, fileName });
-              }}
-            />
+            <SpreadsheetImportButton kind="deals" label="Import deals…" />
             <button type="button" className="btn btn-quiet" onClick={() => downloadText('deals-template.csv', dealTemplateCsv())}>
               Template
             </button>
@@ -184,24 +131,13 @@ export function DataView({ year, asOf }: { year: number; asOf: string }) {
         </article>
 
         <article className="panel">
-          <h2 className="h3">Payments (CSV)</h2>
-          <p className="muted">Imported payments start unallocated. Match them to deals afterward on the Payments tab.</p>
+          <h2 className="h3">Payments</h2>
+          <p className="muted">Import payment lines from a CSV or Excel commission statement. Imported payments start unallocated; match them to deals afterward on the Payments tab.</p>
           <div className="actions-inline">
             <button type="button" className="btn" onClick={() => downloadText(`${prefix}-payments-${stamp}.csv`, paymentsToCsv(ws))} disabled={!ws.payments.length}>
               Export payments
             </button>
-            <FilePicker
-              id="payment-csv"
-              label="Import payments…"
-              accept=".csv,text/csv"
-              onText={(text, fileName) => {
-                setMessage(null);
-                const r = parsePaymentCsv(text, ws);
-                setImportState(
-                  r.ok ? { kind: 'payments', ok: true, items: r.items, fileName } : { kind: 'payments', ok: false, errors: r.errors, fileName },
-                );
-              }}
-            />
+            <SpreadsheetImportButton kind="payments" label="Import payments…" />
             <button type="button" className="btn btn-quiet" onClick={() => downloadText('payments-template.csv', paymentTemplateCsv())}>
               Template
             </button>
@@ -227,91 +163,6 @@ export function DataView({ year, asOf }: { year: number; asOf: string }) {
           </div>
         </article>
       </div>
-
-      {importState && (
-        <Modal title={`Import ${importState.kind} from ${importState.fileName}`} onClose={() => setImportState(null)} wide>
-          {!importState.ok ? (
-            <>
-              <ErrorList errors={importState.errors} />
-              <div className="actions">
-                <button type="button" className="btn" onClick={() => setImportState(null)}>
-                  Close
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <p>
-                {importState.items.length} {importState.kind} ready to import. Nothing is saved until you confirm.
-              </p>
-              {importState.kind === 'payments' && (
-                <p className="notice notice-amber">
-                  Imported payments start unallocated. After importing, open each one on the Payments tab and match it to the deals it paid for.
-                </p>
-              )}
-              <div className="preview-wrap">
-                <table className="preview-table">
-                  {importState.kind === 'deals' ? (
-                    <>
-                      <thead>
-                        <tr>
-                          <th scope="col">Account</th>
-                          <th scope="col" className="r">Credited revenue</th>
-                          <th scope="col">Close</th>
-                          <th scope="col">Expected payment</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {importState.items.slice(0, 100).map((d) => (
-                          <tr key={d.id}>
-                            <td>{d.account}</td>
-                            <td className="r num">{formatCents(d.creditedRevenueCents)}</td>
-                            <td>{formatDateShort(d.closeDate)}</td>
-                            <td>{formatDateShort(d.expectedPaymentDate)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </>
-                  ) : (
-                    <>
-                      <thead>
-                        <tr>
-                          <th scope="col">Date</th>
-                          <th scope="col" className="r">Amount</th>
-                          <th scope="col">Reference</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {importState.items.slice(0, 100).map((p) => (
-                          <tr key={p.id}>
-                            <td>{formatDateShort(p.paymentDate)}</td>
-                            <td className="r num">{formatCents(p.amountCents)}</td>
-                            <td>{p.reference}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </>
-                  )}
-                </table>
-              </div>
-              {importState.kind === 'payments' && (
-                <p className="muted">
-                  Total: {formatCents(sumCents(importState.items.map((p) => p.amountCents)))}
-                </p>
-              )}
-              <FormError message={error} />
-              <div className="actions">
-                <button type="button" className="btn btn-primary" disabled={saving} onClick={() => void confirmImport()}>
-                  Import {importState.items.length} {importState.kind}
-                </button>
-                <button type="button" className="btn" onClick={() => setImportState(null)}>
-                  Cancel
-                </button>
-              </div>
-            </>
-          )}
-        </Modal>
-      )}
 
       {restore && (
         <Modal title="Restore this backup?" onClose={() => setRestore(null)} wide>

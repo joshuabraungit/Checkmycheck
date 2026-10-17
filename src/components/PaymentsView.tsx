@@ -6,6 +6,7 @@ import { deletePayment, OpError, savePayment, setPaymentAllocations } from '../l
 import type { Payment } from '../lib/types';
 import { useStore } from '../state';
 import { Field, FormError, Modal } from './ui';
+import { SpreadsheetImportButton } from './SpreadsheetImport';
 
 /**
  * Record or edit a payment and split it across deals in one step. For a new
@@ -244,9 +245,12 @@ export function PaymentsView() {
     <section>
       <div className="section-head">
         <h1>Payments</h1>
-        <button type="button" className="btn btn-primary" onClick={() => setForm({})}>
-          Record payment
-        </button>
+        <div className="actions-inline">
+          <button type="button" className="btn btn-primary" onClick={() => setForm({})}>
+            Record payment
+          </button>
+          <SpreadsheetImportButton kind="payments" label="Import statement" />
+        </div>
       </div>
       {totalUnallocated.gt(0) && (
         <div className="notice notice-amber" role="status">
